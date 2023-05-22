@@ -24,21 +24,24 @@
 //!
 //! [`clear_on_drop`]: https://crates.io/crates/clear_on_drop
 //! [specification]: https://signal.org/docs/specifications/doubleratchet/#recommended-cryptographic-algorithms
-
-use aes::{block_cipher_trait::BlockCipher, Aes256};
+/*
+use aes::Aes256;
+use aes::cipher::BlockCipher;
+//use block_padding::Pkcs7;
+//use cbc::{Encryptor, Decryptor, cipher};
 use block_modes::{block_padding::Pkcs7, BlockMode, Cbc};
 use clear_on_drop::clear::Clear;
 use double_ratchet::{self as dr, KeyPair as _};
 use generic_array::{typenum::U32, GenericArray};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
-use rand_core::{CryptoRng, RngCore};
-use rand_os::OsRng;
+use rand_core::{CryptoRng, RngCore, OsRng};
+//use rand_os::OsRng;
 use sha2::Sha256;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use subtle::ConstantTimeEq;
-use x25519_dalek::{self, SharedSecret};
+use noah_x25519_dalek::{self, SharedSecret};
 
 pub type SignalDR = dr::DoubleRatchet<SignalCryptoProvider>;
 
@@ -121,7 +124,6 @@ impl dr::CryptoProvider for SignalCryptoProvider {
             okm.clear();
             return Err(dr::DecryptError::DecryptFailure);
         }
-
         let cipher = Cbc::<Aes256, Pkcs7>::new_fix(dk, iv);
         if let Ok(pt) = cipher.decrypt_vec(&ct[..ct_len]) {
             okm.clear();
@@ -134,7 +136,7 @@ impl dr::CryptoProvider for SignalCryptoProvider {
 }
 
 #[derive(Clone, Debug)]
-pub struct PublicKey(x25519_dalek::PublicKey);
+pub struct PublicKey(noah_x25519_dalek::PublicKey);
 
 impl Eq for PublicKey {}
 
@@ -150,9 +152,9 @@ impl Hash for PublicKey {
     }
 }
 
-impl<'a> From<&'a x25519_dalek::StaticSecret> for PublicKey {
-    fn from(private: &'a x25519_dalek::StaticSecret) -> PublicKey {
-        PublicKey(x25519_dalek::PublicKey::from(private))
+impl<'a> From<&'a noah_x25519_dalek::StaticSecret> for PublicKey {
+    fn from(private: &'a noah_x25519_dalek::StaticSecret) -> PublicKey {
+        PublicKey(noah_x25519_dalek::PublicKey::from(private))
     }
 }
 
@@ -163,7 +165,7 @@ impl AsRef<[u8]> for PublicKey {
 }
 
 pub struct KeyPair {
-    private: x25519_dalek::StaticSecret,
+    private: noah_x25519_dalek::StaticSecret,
     public: PublicKey,
 }
 
@@ -192,7 +194,7 @@ impl dr::KeyPair for KeyPair {
     type PublicKey = PublicKey;
 
     fn new<R: CryptoRng + RngCore>(rng: &mut R) -> KeyPair {
-        let private = x25519_dalek::StaticSecret::new(rng);
+        let private = noah_x25519_dalek::StaticSecret::new(rng);
         let public = PublicKey::from(&private);
         KeyPair { private, public }
     }
@@ -287,3 +289,4 @@ fn signal_session() {
         .ratchet_decrypt(&h_a_2, b"Incorrect ciphertext", ad_a)
         .is_err());
 }
+*/
