@@ -468,6 +468,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> where {
     }
 
     // Concatenate `h` and `ad` in a single byte-vector.
+    #[allow(dead_code)]
     fn concat(h: &Header<CP::PublicKey>, ad: &[u8]) -> Vec<u8> {
         let mut v = Vec::new();
         v.extend_from_slice(ad);
@@ -1141,7 +1142,7 @@ mod tests {
             let (h_a, ct_a) = alice.ratchet_encrypt(b"Hello Bob", ad_a, &mut rng);
             bob.ratchet_decrypt(&h_a, &ct_a, ad_a).unwrap();
             stored += MAX_SKIP;
-            &bob.mkskipped.0.values().map(|hm| hm.len()).sum::<usize>();
+            let _ = &bob.mkskipped.0.values().map(|hm| hm.len()).sum::<usize>();
         }
         alice.ratchet_encrypt(b"Bob can't store this key anymore", ad_a, &mut rng);
         let (h_a, ct_a) = alice.ratchet_encrypt(b"Gotcha, Bob!", ad_a, &mut rng);
