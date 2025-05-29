@@ -240,6 +240,11 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> where {
         }
     }
 
+    /// The current public key that can be shared with the other party
+    pub fn public_key(&self) -> &CP::PublicKey {
+        self.dhs.public()
+    }
+
     /// Try to encrypt the `plaintext`. See `ratchet_encrypt` for details.
     ///
     /// Fails with `EncryptUninit` when `self` is not yet initialized for encrypting.
