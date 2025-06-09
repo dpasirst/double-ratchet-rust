@@ -691,6 +691,20 @@ pub trait CryptoProvider {
         associated_data: &[u8],
     ) -> Result<Vec<u8>, DecryptError>;
 }
+/// Provider of the required cryptographic types and functions.
+///
+/// The implementer of this trait provides the `DoubleRatchet` with the required external functions
+/// as given in the [specification].
+///
+/// # Security considerations
+///
+/// The details of the `CryptoProvider` are critical for providing security of the communication.
+/// The `DoubleRatchet` can only guarantee security of communication when instantiated with a
+/// `CryptoProvider` with secure types and functions. The [specification] provides some sensible
+/// [recommendations] and for example code using the `DoubleRatchet` see `tests/signal.rs`.
+///
+/// [specification]: https://signal.org/docs/specifications/doubleratchet/#external-functions
+/// [recommendations]: https://signal.org/docs/specifications/doubleratchet/#recommended-cryptographic-algorithms
 #[cfg(feature = "serde")]
 pub trait CryptoProvider {
     /// A public key for use in the Diffie-Hellman calculation.
@@ -1175,7 +1189,7 @@ mod tests {
     #[test]
     fn test_asymmetric_setup_with_session_state() {
         let mut rng = mock::Rng::default();
-        let (mut alice, mut bob) = asymmetric_setup(&mut rng);
+        let (mut alice, bob) = asymmetric_setup(&mut rng);
         let bob_session_state = bob.session_state().encode().unwrap();        
 
         // Alice can encrypt, Bob can't
