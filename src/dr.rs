@@ -1,6 +1,6 @@
 use core::{cmp, fmt, hash::Hash};
 use hashbrown::HashMap;
-use rand_core::{CryptoRng, RngCore};
+use rand_core::{CryptoRng, RngCore, OsRng};
 
 #[cfg(feature = "std")]
 use std::error::Error;
@@ -120,6 +120,7 @@ pub type Counter = u64;
 /// [secure deletion]: https://signal.org/docs/specifications/doubleratchet/#secure-deletion
 /// [recovery from compromise]: https://signal.org/docs/specifications/doubleratchet/#recovery-from-compromise
 pub struct DoubleRatchet<CP: CryptoProvider> {
+    id: u64,
     dhs: CP::KeyPair,
     dhr: Option<CP::PublicKey>,
     rk: CP::RootKey,
@@ -143,8 +144,9 @@ where
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "DoubleRatchet {{ dhs: {:?}, dhr: {:?}, rk: {:?}, cks: {:?}, ckr: {:?}, ns: {:?}, \
+            "DoubleRatchet {{ id: {:?}, dhs: {:?}, dhr: {:?}, rk: {:?}, cks: {:?}, ckr: {:?}, ns: {:?}, \
              nr: {:?}, pn: {:?}, mkskipped: {:?} }}",
+            self.id,
             self.dhs,
             self.dhr,
             self.rk,
@@ -189,6 +191,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
         let dhs = CP::KeyPair::new(rng);
         let (rk, cks) = CP::kdf_rk(shared_secret, &CP::diffie_hellman(&dhs, &them));
         Self {
+            id: rng.next_u64(),
             dhs,
             dhr: Some(them),
             rk,
@@ -228,6 +231,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
         initial_send: Option<CP::ChainKey>,
     ) -> Self {
         Self {
+            id: OsRng.next_u64(),
             dhs: us,
             dhr: None,
             rk: shared_secret,
@@ -378,7 +382,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
         ad: &[u8],
     ) -> Result<(Diff<CP>, Vec<u8>), DecryptError> {
         use Diff::{CurrentChain, NextChain, OldKey};
-        if let Some(mk) = self.mkskipped.get(&h.dh, h.n) {
+        if let Some(mk) = self.mkskipped.get(self.id, &h.dh, h.n) {
             Ok((OldKey, CP::decrypt(mk, ct, ad)?))
         } else if self.dhr.as_ref() == Some(&h.dh) {
             let (ckr, mut mks) =
@@ -401,7 +405,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
                 .ok_or(DecryptError::MessageKeyNotFound)? as usize;
         if self.mkskipped.max_skip() < skip {
             Err(DecryptError::SkipTooLarge)
-        } else if self.mkskipped.can_store(skip) {
+        } else if self.mkskipped.can_store(self.id, skip) {
             Ok(skip)
         } else {
             Err(DecryptError::StorageFull)
@@ -421,7 +425,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
             Err(DecryptError::SkipTooLarge)
         } else if self
             .mkskipped
-            .can_store((prev_skip + skip).saturating_sub(1))
+            .can_store(self.id, (prev_skip + skip).saturating_sub(1))
         {
             Ok(skip)
         } else {
@@ -433,9 +437,9 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
     fn update(&mut self, diff: Diff<CP>, h: &Header<CP::PublicKey>) {
         use Diff::{CurrentChain, NextChain, OldKey};
         match diff {
-            OldKey => self.mkskipped.remove(&h.dh, h.n),
+            OldKey => self.mkskipped.remove(self.id, &h.dh, h.n),
             CurrentChain(ckr, mks) => {
-                self.mkskipped.extend(&h.dh, self.nr, mks);
+                self.mkskipped.extend(self.id, &h.dh, self.nr, mks);
                 self.ckr = Some(ckr);
                 self.nr = h.n + 1;
             }
@@ -444,14 +448,14 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
                     let ckr = self.ckr.as_ref().unwrap();
                     let (_, prev_mks) = Self::skip_message_keys(ckr, (h.pn - self.nr - 1) as usize);
                     let dhr = self.dhr.as_ref().unwrap();
-                    self.mkskipped.extend(dhr, self.nr, prev_mks);
+                    self.mkskipped.extend(self.id, dhr, self.nr, prev_mks);
                 }
                 self.dhr = Some(h.dh.clone());
                 self.rk = rk;
                 self.cks = None;
                 self.ckr = Some(ckr);
                 self.nr = h.n + 1;
-                self.mkskipped.extend(&h.dh, 0, mks);
+                self.mkskipped.extend(self.id, &h.dh, 0, mks);
             }
         }
     }
@@ -651,12 +655,12 @@ impl<CP: CryptoProvider> KeyStore<CP> {
     }
 
     // Get the MessageKey at `(dh, n)` if it is stored
-    fn get(&self, dh: &CP::PublicKey, n: Counter) -> Option<&CP::MessageKey> {
+    fn get(&self, _id: u64, dh: &CP::PublicKey, n: Counter) -> Option<&CP::MessageKey> {
         self.key_cache.get(dh)?.get(&n)
     }
 
     // Do `n` more MessageKeys fit in the KeyStore?
-    fn can_store(&self, n: usize) -> bool {
+    fn can_store(&self, _id: u64, n: usize) -> bool {
         let current: usize = self.key_cache.values().map(HashMap::len).sum();
         current + n <= MKS_CAPACITY
     }
@@ -667,7 +671,7 @@ impl<CP: CryptoProvider> KeyStore<CP> {
     //   (dh, n  ): mks[0]
     //   (dh, n+1): mks[1]
     //   ...
-    fn extend(&mut self, dh: &CP::PublicKey, n: Counter, mks: Vec<CP::MessageKey>) {
+    fn extend(&mut self, _id: u64, dh: &CP::PublicKey, n: Counter, mks: Vec<CP::MessageKey>) {
         let values = (n..).zip(mks);
         if let Some(v) = self.key_cache.get_mut(dh) {
             v.extend(values);
@@ -679,7 +683,7 @@ impl<CP: CryptoProvider> KeyStore<CP> {
     // Remove the MessageKey at index `(dh, n)`
     //
     // Assumes the MessageKey is indeed stored.
-    fn remove(&mut self, dh: &CP::PublicKey, n: Counter) {
+    fn remove(&mut self, _id: u64, dh: &CP::PublicKey, n: Counter) {
         debug_assert!(self.key_cache.contains_key(dh));
         let hm = self.key_cache.get_mut(dh).unwrap();
         debug_assert!(hm.contains_key(&n));
