@@ -158,7 +158,7 @@ where
     }
 }
 
-impl<CP: CryptoProvider> DoubleRatchet<CP> where {
+impl<CP: CryptoProvider> DoubleRatchet<CP> {
     /// Initialize "Alice": the sender of the first message.
     ///
     /// This implements `RatchetInitAlice` as defined in the [specification] when `initial_receive
@@ -361,9 +361,8 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> where {
         // TODO: is this the correct place for clear_stack_on_return?
         let mut h = header.as_ref();
         h.extend_from_slice(associated_data);
-        let (diff, pt) =
-            self.try_decrypt(header, ciphertext, &h)?;
-            //self.try_decrypt(header, ciphertext, &Self::concat(&header, associated_data))?;
+        let (diff, pt) = self.try_decrypt(header, ciphertext, &h)?;
+        //self.try_decrypt(header, ciphertext, &Self::concat(&header, associated_data))?;
         self.update(diff, header);
         Ok(pt)
     }
@@ -378,7 +377,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> where {
         ct: &[u8],
         ad: &[u8],
     ) -> Result<(Diff<CP>, Vec<u8>), DecryptError> {
-        use Diff::*;
+        use Diff::{CurrentChain, NextChain, OldKey};
         if let Some(mk) = self.mkskipped.get(&h.dh, h.n) {
             Ok((OldKey, CP::decrypt(mk, ct, ad)?))
         } else if self.dhr.as_ref() == Some(&h.dh) {
@@ -432,7 +431,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> where {
 
     // Update the internal state. Assumes that the validity of `h` has already been checked.
     fn update(&mut self, diff: Diff<CP>, h: &Header<CP::PublicKey>) {
-        use Diff::*;
+        use Diff::{CurrentChain, NextChain, OldKey};
         match diff {
             OldKey => self.mkskipped.remove(&h.dh, h.n),
             CurrentChain(ckr, mks) => {
@@ -462,7 +461,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> where {
     fn skip_message_keys(ckr: &CP::ChainKey, skip: usize) -> (CP::ChainKey, Vec<CP::MessageKey>) {
         // Note: should use std::iter::unfold (currently still in nightly)
         let mut mks = Vec::with_capacity(skip + 1);
-        let (mut ckr, mk) = CP::kdf_ck(&ckr);
+        let (mut ckr, mk) = CP::kdf_ck(ckr);
         mks.push(mk);
         for _ in 0..skip {
             let cm = CP::kdf_ck(&ckr);
@@ -507,10 +506,10 @@ impl<PK: AsRef<[u8]>> Header<PK> {
     }
 
     fn as_ref(&self) -> Vec<u8> {
-        let mut bytes:Vec<u8> = Vec::new();
-        bytes.extend_from_slice(self.dh.as_ref().clone());
-        bytes.extend_from_slice(&self.pn.clone().to_be_bytes());
-        bytes.extend_from_slice(&self.n.clone().to_be_bytes());
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.extend_from_slice(self.dh.as_ref());
+        bytes.extend_from_slice(&self.pn.to_be_bytes());
+        bytes.extend_from_slice(&self.n.to_be_bytes());
         bytes
     }
 }
@@ -606,7 +605,7 @@ const MKS_CAPACITY: usize = 2000;
 // discussion.
 //
 // [specification]: https://signal.org/docs/specifications/doubleratchet/#deletion-of-skipped-message-keys
-struct KeyStore<CP: CryptoProvider>{
+struct KeyStore<CP: CryptoProvider> {
     key_cache: HashMap<CP::PublicKey, HashMap<Counter, CP::MessageKey>>,
     max_skip: usize,
 }
@@ -618,20 +617,25 @@ where
     CP::MessageKey: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "KeyStore Max Skip {}\nkey_cache({:?})", self.max_skip, self.key_cache)
+        write!(
+            f,
+            "KeyStore Max Skip {}\nkey_cache({:?})",
+            self.max_skip, self.key_cache
+        )
     }
 }
 
 impl<CP: CryptoProvider> KeyStore<CP> {
     fn new() -> Self {
-        Self{
+        Self {
             key_cache: HashMap::new(),
             max_skip: DEFAULT_MAX_SKIP,
         }
     }
 
+    #[allow(dead_code)]
     fn new_with_max_skip(max_skip: usize) -> Self {
-        Self{
+        Self {
             key_cache: HashMap::new(),
             max_skip,
         }
@@ -641,6 +645,7 @@ impl<CP: CryptoProvider> KeyStore<CP> {
         self.max_skip
     }
 
+    #[allow(dead_code)]
     fn set_max_skip(&mut self, max_skip: usize) {
         self.max_skip = max_skip;
     }
@@ -663,7 +668,7 @@ impl<CP: CryptoProvider> KeyStore<CP> {
     //   (dh, n+1): mks[1]
     //   ...
     fn extend(&mut self, dh: &CP::PublicKey, n: Counter, mks: Vec<CP::MessageKey>) {
-        let values = (n..).zip(mks.into_iter());
+        let values = (n..).zip(mks);
         if let Some(v) = self.key_cache.get_mut(dh) {
             v.extend(values);
         } else {
@@ -738,7 +743,7 @@ impl Error for DecryptError {}
 
 impl fmt::Display for DecryptError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use DecryptError::*;
+        use DecryptError::{DecryptFailure, MessageKeyNotFound, SkipTooLarge, StorageFull};
         match self {
             DecryptFailure => write!(f, "Error during verify-decrypting"),
             MessageKeyNotFound => {
@@ -755,6 +760,7 @@ impl fmt::Display for DecryptError {
 #[cfg(feature = "test")]
 #[allow(unused)]
 #[allow(missing_docs)]
+#[allow(clippy::wildcard_imports)]
 pub mod mock {
     use super::*;
 
@@ -1168,7 +1174,12 @@ mod tests {
             let (h_a, ct_a) = alice.ratchet_encrypt(b"Hello Bob", ad_a, &mut rng);
             bob.ratchet_decrypt(&h_a, &ct_a, ad_a).unwrap();
             stored += bob.mkskipped.max_skip();
-            let _ = &bob.mkskipped.key_cache.values().map(|hm| hm.len()).sum::<usize>();
+            let _ = &bob
+                .mkskipped
+                .key_cache
+                .values()
+                .map(|hm| hm.len())
+                .sum::<usize>();
         }
         alice.ratchet_encrypt(b"Bob can't store this key anymore", ad_a, &mut rng);
         let (h_a, ct_a) = alice.ratchet_encrypt(b"Gotcha, Bob!", ad_a, &mut rng);
