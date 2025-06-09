@@ -15,23 +15,25 @@ travis-ci = {repository = "sebastianv89/double-ratchet"}
 
 [dependencies]
 rand_core = "0.6.4"
-hashbrown = "0.13.2"
-
+hashbrown = "0.15.4"
+serde = { version = "1.0.219", features = ["derive", "serde_derive"], optional = true  }
+serde_json = { version = "1.0.140", optional = true }
 
 
 [dev-dependencies]
 clear_on_drop = "0.2"
 generic-array = "0.14.7"
-hkdf = "0.10.0"
-hmac = "0.10.1"
-sha2 = "0.9.9"
+hkdf = "0.12.4"
+hmac = "0.12.1"
+sha2 = "0.10.9"
 subtle = "2"
 noah-x25519-dalek = "4.0.0"
 chacha20poly1305 = "0.10.1"
 
 [features]
-default = ["std", "test"]
+default = ["std", "serde", "test"]
 std = []
+serde = ["std", "dep:serde", "dep:serde_json"]
 # Allow doctests with mock objects
 # See: https://github.com/rust-lang/rust/issues/45599
 test = []

@@ -1,9 +1,16 @@
+#[cfg(feature = "serde")]
+use core::convert::TryFrom;
 use core::{cmp, fmt, hash::Hash};
 use hashbrown::HashMap;
 use rand_core::{CryptoRng, RngCore, OsRng};
 
 #[cfg(feature = "std")]
 use std::error::Error;
+#[cfg(feature = "std")]
+use std::string::String;
+
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
 
 use alloc::vec::Vec;
 
@@ -260,6 +267,24 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
         self.mkskipped.set_maximums(self.id, max_skip, self.mkskipped.max_capacity(&self.id));
     }
 
+    #[allow(dead_code)]
+    #[cfg(feature = "serde")]
+    fn session_state(&self) -> SessionState {
+        SessionState {
+            id: self.id,
+            dhs_priv: self.dhs.private_bytes(),
+            dhs_pub: self.dhs.public().clone().as_ref().to_vec(),
+            dhr: self.dhr.as_ref().map(|v| v.as_ref().to_vec()),
+            rk: self.rk.as_ref().to_vec(),
+            cks: self.cks.as_ref().map(|v| v.as_ref().to_vec()),
+            ckr: self.ckr.as_ref().map(|v| v.as_ref().to_vec()),
+            ns: self.ns,
+            nr: self.nr,
+            pn: self.pn,
+            max_skip: self.mkskipped.max_skip(&self.id),
+            max_capacity: self.mkskipped.max_capacity(&self.id),
+        }
+    }
 
     /// Try to encrypt the `plaintext`. See `ratchet_encrypt` for details.
     ///
@@ -497,6 +522,77 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
     }
 }
 
+#[cfg(feature = "serde")]
+impl<'a, CP: CryptoProvider> TryFrom<&'a SessionState> for DoubleRatchet<CP> {
+    type Error = DRError;
+    fn try_from(session_state: &'a SessionState) -> Result<Self, Self::Error> {
+        Ok(
+            Self {
+                id: session_state.id,
+                dhs: CP::KeyPair::new_from_bytes(&session_state.dhs_priv, &session_state.dhs_pub)?,
+                dhr: if let Some(dhr) = session_state.dhr.clone() {
+                    Some(CP::new_public_key(&dhr).map_err(|_| DRError::InvalidKey)?)
+                } else { None },
+                rk: CP::new_root_key(&session_state.rk).map_err(|_| DRError::InvalidKey)?,
+                cks: if let Some(cks) = session_state.cks.clone() {
+                    Some(CP::new_chain_key(&cks).map_err(|_| DRError::InvalidKey)?)
+                } else { None },
+                ckr: if let Some(ckr) = session_state.ckr.clone() {
+                    Some(CP::new_chain_key(&ckr).map_err(|_| DRError::InvalidKey)?)
+                } else { None },
+                ns: session_state.ns,
+                nr: session_state.nr,
+                pn: session_state.pn,
+                mkskipped: KeyStore::new(), // TODO: fix this, its wrong!!!!
+            }
+        )
+    }
+}
+
+/// SessionState requires the serde feature enablement
+/// it allows for persistence (save/recover) of a double ratchet
+/// state. It does not backup the Message Key Skip Store!
+#[cfg(feature = "serde")]
+#[derive(Serialize, Deserialize)]
+pub struct SessionState {
+    id: u64,
+    // sending keypair (priv)
+    dhs_priv: Vec<u8>,
+    // sending keypair (pub)
+    dhs_pub: Vec<u8>,
+    /// receiving public key
+    dhr: Option<Vec<u8>>,
+    /// root key
+    rk: Vec<u8>,
+    /// chain key sending
+    cks: Option<Vec<u8>>,
+    /// chain key receiving
+    ckr: Option<Vec<u8>>,
+    /// sending message number
+    ns: Counter,
+    /// receiving message number
+    nr: Counter,
+    /// previous message number
+    pn: Counter,
+    /// limit on the receive chain ratchet steps when trying 
+    /// to decrypt (per alice/bob chain). DoS protection
+    max_skip: usize,
+    ///  Maximum amount of skipped message keys that can 
+    /// be stored per alice/bob paring
+    max_capacity: usize,
+}
+
+impl SessionState {
+    /// encodes the session state to a json string
+    pub fn encode(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+    /// decodes a session state from a json &str
+    pub fn decode(s: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(s)
+    }
+}
+
 /// The Header that should be sent alongside the ciphertext.
 ///
 /// The Header contains the information for the `DoubleRatchet` to find the correct `MessageKey` to
@@ -544,6 +640,7 @@ impl<PK: AsRef<[u8]>> Header<PK> {
 ///
 /// [specification]: https://signal.org/docs/specifications/doubleratchet/#external-functions
 /// [recommendations]: https://signal.org/docs/specifications/doubleratchet/#recommended-cryptographic-algorithms
+#[cfg(not(feature = "serde"))]
 pub trait CryptoProvider {
     /// A public key for use in the Diffie-Hellman calculation.
     ///
@@ -594,6 +691,66 @@ pub trait CryptoProvider {
         associated_data: &[u8],
     ) -> Result<Vec<u8>, DecryptError>;
 }
+#[cfg(feature = "serde")]
+pub trait CryptoProvider {
+    /// A public key for use in the Diffie-Hellman calculation.
+    ///
+    /// It is assumed that a `PublicKey` holds a valid key, so if any verification is required the
+    /// constructor of this type would be a good place to do so.
+    type PublicKey: AsRef<[u8]> + Clone + Eq + Hash;
+    /// creates a PublicKey, necessary for recovering an instance 
+    /// from a persisted session state
+    fn new_public_key(key: &[u8]) -> Result<Self::PublicKey, DRError>;
+
+    /// A private/public key-pair for use in the Diffie-Hellman calculation.
+    type KeyPair: KeyPair<PublicKey = Self::PublicKey>;
+
+    /// The result of a Diffie-Hellman calculation.
+    type SharedSecret;
+
+    /// A `RootKey` is used in the outer Diffie-Hellman ratchet.
+    type RootKey: AsRef<[u8]>;
+    /// creates a RootKey, necessary for recovering an instance 
+    /// from a persisted session state
+    fn new_root_key(key: &[u8]) -> Result<Self::RootKey, DRError>;
+
+    /// A `ChainKey` is used in the inner symmetric ratchets.
+    type ChainKey: AsRef<[u8]>;
+    /// creates a ChainKey, necessary for recovering an instance 
+    /// from a persisted session state
+    fn new_chain_key(key: &[u8]) -> Result<Self::ChainKey, DRError>;
+
+    /// A `MessageKey` is used to encrypt/decrypt messages.
+    ///
+    /// The implementation of this type could be a complex type: for example an implementation that
+    /// works by the encrypt-then-MAC paradigm may require a tuple consisting of an encryption key
+    /// and a MAC key.
+    type MessageKey;
+
+    /// Perform the Diffie-Hellman operation.
+    fn diffie_hellman(us: &Self::KeyPair, them: &Self::PublicKey) -> Self::SharedSecret;
+
+    /// Derive a new root-key/chain-key pair from the old root-key and a fresh shared secret.
+    fn kdf_rk(
+        root_key: &Self::RootKey,
+        shared_secret: &Self::SharedSecret,
+    ) -> (Self::RootKey, Self::ChainKey);
+
+    /// Derive a new chain-key/message-key pair from the old chain-key.
+    fn kdf_ck(chain_key: &Self::ChainKey) -> (Self::ChainKey, Self::MessageKey);
+
+    /// Authenticate-encrypt the plaintext and associated data.
+    ///
+    /// This method MUST authenticate `associated_data`, because it contains the header bytes.
+    fn encrypt(key: &Self::MessageKey, plaintext: &[u8], associated_data: &[u8]) -> Vec<u8>;
+
+    /// Verify-decrypt the ciphertext and associated data.
+    fn decrypt(
+        key: &Self::MessageKey,
+        ciphertext: &[u8],
+        associated_data: &[u8],
+    ) -> Result<Vec<u8>, DecryptError>;
+}
 
 /// A private-/public-key pair
 ///
@@ -609,6 +766,15 @@ pub trait KeyPair {
 
     /// Get a reference to the public half of the key pair
     fn public(&self) -> &Self::PublicKey;
+
+    /// access the private key, this is required for persisting the session state
+    #[cfg(feature = "serde")]
+    fn private_bytes(&self) -> Vec<u8>;
+
+    /// used for reinitialization using the persisted session state
+    #[cfg(feature = "serde")]
+    fn new_from_bytes(private: &[u8], public: &[u8]) -> Result<Self, DRError> where Self: Sized;
+
 }
 
 // Maximum amount of skipped message keys that can be stored
@@ -781,6 +947,28 @@ impl fmt::Display for DecryptError {
     }
 }
 
+/// General Errors
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DRError {
+    /// Data is invalid or cannot be processed
+    InvalidData,
+    /// Key is invalid or cannot be processed
+    InvalidKey,
+}
+
+#[cfg(feature = "std")]
+impl Error for DRError {}
+
+impl fmt::Display for DRError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use DRError::{InvalidData, InvalidKey};
+        match self {
+            InvalidData => write!(f, "Data is invalid or cannot be processed"),
+            InvalidKey => write!(f, "Key is invalid or cannot be processed"),
+        }
+    }
+}
+
 // Create a mock CryptoProvider for testing purposes. See `tests/signal.rs` for a proper example
 // implementation.
 #[cfg(feature = "test")]
@@ -828,6 +1016,27 @@ pub mod mock {
                 Ok(Vec::from(&ct[3..ct.len() - ad.len()]))
             }
         }
+        
+        fn new_public_key(key: &[u8]) -> Result<Self::PublicKey, DRError> {
+            if key.len() != 1 {
+                return Err(DRError::InvalidKey);
+            }
+            Ok(PublicKey([key[0]]))
+        }
+        
+        fn new_root_key(key: &[u8]) -> Result<Self::RootKey, DRError> {
+            if key.len() != 2 {
+                return Err(DRError::InvalidKey);
+            }
+            Ok([key[0], key[1]])
+        }
+        
+        fn new_chain_key(key: &[u8]) -> Result<Self::ChainKey, DRError> {
+            if key.len() != 3 {
+                return Err(DRError::InvalidKey);
+            }
+            Ok([key[0], key[1], key[2]])
+        }
     }
 
     #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -850,6 +1059,21 @@ pub mod mock {
 
         fn public(&self) -> &PublicKey {
             &self.1
+        }
+
+        /// access the private key, this is required for persisting the session state
+        #[cfg(feature = "serde")]
+        fn private_bytes(&self) -> Vec<u8> {
+            self.0.to_vec()
+        }
+
+        /// used for reinitialization using the persisted session state
+        #[cfg(feature = "serde")]
+        fn new_from_bytes(private: &[u8], public: &[u8]) -> Result<Self, DRError> where Self: Sized {
+            if private.len() != 1 || public.len() != 1 {
+                return Err(DRError::InvalidData);
+            }
+            Ok(Self([private[0]], PublicKey([public[0]])))
         }
     }
 
@@ -942,6 +1166,39 @@ mod tests {
             Ok(Vec::from(&pt_a[..])),
             bob.ratchet_decrypt(&h_a, &ct_a, ad_a)
         );
+        assert_eq!(
+            Ok(Vec::from(&pt_b[..])),
+            alice.ratchet_decrypt(&h_b, &ct_b, ad_b)
+        );
+    }
+
+    #[test]
+    fn test_asymmetric_setup_with_session_state() {
+        let mut rng = mock::Rng::default();
+        let (mut alice, mut bob) = asymmetric_setup(&mut rng);
+        let bob_session_state = bob.session_state().encode().unwrap();        
+
+        // Alice can encrypt, Bob can't
+        let (pt_a, ad_a) = (b"Hi Bobby", b"A2B");
+        let (pt_b, ad_b) = (b"What's up Al?", b"B2A");
+        let (h_a, ct_a) = alice.ratchet_encrypt(pt_a, ad_a, &mut rng);
+        let alice_session_state = alice.session_state().encode().unwrap();
+
+        let bob_session = SessionState::decode(&bob_session_state).unwrap();
+        let mut bob = DR::try_from(&bob_session).unwrap();
+        assert_eq!(
+            Err(EncryptUninit),
+            bob.try_ratchet_encrypt(pt_b, ad_b, &mut rng)
+        );
+        assert_eq!(
+            Ok(Vec::from(&pt_a[..])),
+            bob.ratchet_decrypt(&h_a, &ct_a, ad_a)
+        );
+
+        // but after decryption Bob can encrypt
+        let (h_b, ct_b) = bob.ratchet_encrypt(pt_b, ad_b, &mut rng);
+        let alice_session = SessionState::decode(&alice_session_state).unwrap();
+        let mut alice = DR::try_from(&alice_session).unwrap();
         assert_eq!(
             Ok(Vec::from(&pt_b[..])),
             alice.ratchet_decrypt(&h_b, &ct_b, ad_b)
