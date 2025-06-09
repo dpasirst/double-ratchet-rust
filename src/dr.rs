@@ -135,7 +135,7 @@ pub struct DoubleRatchet<CP: CryptoProvider> {
     ns: Counter,
     nr: Counter,
     pn: Counter,
-    mkskipped: KeyStore<CP>,
+    msg_key_cache: KeyStore<CP>,
 }
 
 impl<CP> fmt::Debug for DoubleRatchet<CP>
@@ -151,7 +151,7 @@ where
         write!(
             f,
             "DoubleRatchet {{ id: {:?}, dhs: {:?}, dhr: {:?}, rk: {:?}, cks: {:?}, ckr: {:?}, ns: {:?}, \
-             nr: {:?}, pn: {:?}, mkskipped: {:?} }}",
+             nr: {:?}, pn: {:?}, message_key_cache: {:?} }}",
             self.id,
             self.dhs,
             self.dhr,
@@ -161,7 +161,7 @@ where
             self.ns,
             self.nr,
             self.pn,
-            self.mkskipped
+            self.msg_key_cache
         )
     }
 }
@@ -206,7 +206,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
             ns: 0,
             nr: 0,
             pn: 0,
-            mkskipped: KeyStore::new(),
+            msg_key_cache: KeyStore::new(),
         }
     }
 
@@ -246,7 +246,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
             ns: 0,
             nr: 0,
             pn: 0,
-            mkskipped: KeyStore::new(),
+            msg_key_cache: KeyStore::new(),
         }
     }
 
@@ -258,13 +258,13 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
     /// maximum number of skipped entries to prevent DoS
     #[allow(dead_code)]
     fn max_skip(&self) -> usize {
-        self.mkskipped.max_skip(&self.id)
+        self.msg_key_cache.max_skip(&self.id)
     }
 
     /// set the maximum number of skipped entries to prevent DoS
     #[allow(dead_code)]
     fn set_max_skip(&mut self, max_skip: usize) {
-        self.mkskipped.set_maximums(self.id, max_skip, self.mkskipped.max_capacity(&self.id));
+        self.msg_key_cache.set_maximums(self.id, max_skip, self.msg_key_cache.max_capacity(&self.id));
     }
 
     #[allow(dead_code)]
@@ -281,8 +281,8 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
             ns: self.ns,
             nr: self.nr,
             pn: self.pn,
-            max_skip: self.mkskipped.max_skip(&self.id),
-            max_capacity: self.mkskipped.max_capacity(&self.id),
+            max_skip: self.msg_key_cache.max_skip(&self.id),
+            max_capacity: self.msg_key_cache.max_capacity(&self.id),
         }
     }
 
@@ -419,7 +419,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
         ad: &[u8],
     ) -> Result<(Diff<CP>, Vec<u8>), DecryptError> {
         use Diff::{CurrentChain, NextChain, OldKey};
-        if let Some(mk) = self.mkskipped.get(&self.id, &h.dh, h.n) {
+        if let Some(mk) = self.msg_key_cache.get(&self.id, &h.dh, h.n) {
             Ok((OldKey, CP::decrypt(mk, ct, ad)?))
         } else if self.dhr.as_ref() == Some(&h.dh) {
             let (ckr, mut mks) =
@@ -440,9 +440,9 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
         let skip =
             h.n.checked_sub(self.nr)
                 .ok_or(DecryptError::MessageKeyNotFound)? as usize;
-        if self.mkskipped.max_skip(&self.id) < skip {
+        if self.msg_key_cache.max_skip(&self.id) < skip {
             Err(DecryptError::SkipTooLarge)
-        } else if self.mkskipped.can_store(&self.id, skip) {
+        } else if self.msg_key_cache.can_store(&self.id, skip) {
             Ok(skip)
         } else {
             Err(DecryptError::StorageFull)
@@ -458,10 +458,10 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
             h.pn.checked_sub(self.nr)
                 .ok_or(DecryptError::MessageKeyNotFound)? as usize;
         let skip = h.n as usize;
-        if self.mkskipped.max_skip(&self.id) < cmp::max(prev_skip, skip) {
+        if self.msg_key_cache.max_skip(&self.id) < cmp::max(prev_skip, skip) {
             Err(DecryptError::SkipTooLarge)
         } else if self
-            .mkskipped
+            .msg_key_cache
             .can_store(&self.id, (prev_skip + skip).saturating_sub(1))
         {
             Ok(skip)
@@ -474,9 +474,9 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
     fn update(&mut self, diff: Diff<CP>, h: &Header<CP::PublicKey>) {
         use Diff::{CurrentChain, NextChain, OldKey};
         match diff {
-            OldKey => self.mkskipped.remove(&self.id, &h.dh, h.n),
+            OldKey => self.msg_key_cache.remove(&self.id, &h.dh, h.n),
             CurrentChain(ckr, mks) => {
-                self.mkskipped.extend(self.id, &h.dh, self.nr, mks);
+                self.msg_key_cache.extend(self.id, &h.dh, self.nr, mks);
                 self.ckr = Some(ckr);
                 self.nr = h.n + 1;
             }
@@ -485,14 +485,14 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
                     let ckr = self.ckr.as_ref().unwrap();
                     let (_, prev_mks) = Self::skip_message_keys(ckr, (h.pn - self.nr - 1) as usize);
                     let dhr = self.dhr.as_ref().unwrap();
-                    self.mkskipped.extend(self.id, dhr, self.nr, prev_mks);
+                    self.msg_key_cache.extend(self.id, dhr, self.nr, prev_mks);
                 }
                 self.dhr = Some(h.dh.clone());
                 self.rk = rk;
                 self.cks = None;
                 self.ckr = Some(ckr);
                 self.nr = h.n + 1;
-                self.mkskipped.extend(self.id, &h.dh, 0, mks);
+                self.msg_key_cache.extend(self.id, &h.dh, 0, mks);
             }
         }
     }
@@ -543,7 +543,7 @@ impl<'a, CP: CryptoProvider> TryFrom<&'a SessionState> for DoubleRatchet<CP> {
                 ns: session_state.ns,
                 nr: session_state.nr,
                 pn: session_state.pn,
-                mkskipped: KeyStore::new(), // TODO: fix this, its wrong!!!!
+                msg_key_cache: KeyStore::new(), // TODO: fix this, its wrong!!!!
             }
         )
     }
@@ -1464,7 +1464,7 @@ mod tests {
         let ad_a = b"A2B";
 
         let mut stored = 0;
-        let mks_capacity = alice.mkskipped.max_capacity(&alice.id); //aka DEFAULT_MKS_CAPACITY
+        let mks_capacity = alice.msg_key_cache.max_capacity(&alice.id); //aka DEFAULT_MKS_CAPACITY
         while stored < mks_capacity {
             for _ in 0..cmp::min(alice.max_skip(), mks_capacity - stored) {
                 alice.ratchet_encrypt(b"Not sending this", ad_a, &mut rng);
@@ -1473,7 +1473,7 @@ mod tests {
             bob.ratchet_decrypt(&h_a, &ct_a, ad_a).unwrap();
             stored += bob.max_skip();
             let _ = &bob
-                .mkskipped
+                .msg_key_cache
                 .key_cache
                 .values()
                 .map(|hm| hm.len())
