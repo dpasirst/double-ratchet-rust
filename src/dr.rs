@@ -1,25 +1,26 @@
 #[cfg(feature = "serde")]
 use core::convert::TryFrom;
+#[cfg(feature = "serde")]
+use core::fmt::Debug;
 use core::{cmp, fmt, hash::Hash};
-use hashbrown::HashMap;
-use rand_core::{CryptoRng, RngCore, OsRng};
+use rand_core::{CryptoRng, OsRng, RngCore};
 
+#[cfg(not(feature = "std"))]
+use alloc::{sync::Arc, vec::Vec};
 #[cfg(feature = "std")]
 use std::error::Error;
 #[cfg(feature = "std")]
 use std::string::String;
+#[cfg(feature = "std")]
+use std::{sync::Arc, vec::Vec};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-use alloc::vec::Vec;
+use crate::{DefaultKeyStore, MessageKeyCacheTrait};
 
 // TODO: avoid heap allocations in encrypt/decrypt interfaces
 // TODO: HeaderEncrypted version
-
-// Upper limit on the receive chain ratchet steps when trying to decrypt. Prevents a
-// denial-of-service attack where the attacker
-const DEFAULT_MAX_SKIP: usize = 1000;
 
 /// Message Counter (as seen in the header)
 pub type Counter = u64;
@@ -125,7 +126,7 @@ pub type Counter = u64;
 /// [specification]: https://signal.org/docs/specifications/doubleratchet/#double-ratchet-1
 /// [secure deletion]: https://signal.org/docs/specifications/doubleratchet/#secure-deletion
 /// [recovery from compromise]: https://signal.org/docs/specifications/doubleratchet/#recovery-from-compromise
-pub struct DoubleRatchet<CP: CryptoProvider> {
+pub struct DoubleRatchet<CP: CryptoProvider + 'static> {
     id: u64,
     dhs: CP::KeyPair,
     dhr: Option<CP::PublicKey>,
@@ -135,7 +136,7 @@ pub struct DoubleRatchet<CP: CryptoProvider> {
     ns: Counter,
     nr: Counter,
     pn: Counter,
-    msg_key_cache: KeyStore<CP>,
+    msg_key_cache: Arc<dyn MessageKeyCacheTrait<CP>>,
 }
 
 impl<CP> fmt::Debug for DoubleRatchet<CP>
@@ -206,7 +207,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
             ns: 0,
             nr: 0,
             pn: 0,
-            msg_key_cache: KeyStore::new(),
+            msg_key_cache: Arc::new(DefaultKeyStore::new()),
         }
     }
 
@@ -246,7 +247,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
             ns: 0,
             nr: 0,
             pn: 0,
-            msg_key_cache: KeyStore::new(),
+            msg_key_cache: Arc::new(DefaultKeyStore::new()),
         }
     }
 
@@ -255,16 +256,20 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
         self.dhs.public()
     }
 
-    /// maximum number of skipped entries to prevent DoS
+    /// maximum number of skipped entries to prevent `DoS`
     #[allow(dead_code)]
     fn max_skip(&self) -> usize {
         self.msg_key_cache.max_skip(&self.id)
     }
 
-    /// set the maximum number of skipped entries to prevent DoS
+    /// set the maximum number of skipped entries to prevent `DoS`
     #[allow(dead_code)]
     fn set_max_skip(&mut self, max_skip: usize) {
-        self.msg_key_cache.set_maximums(self.id, max_skip, self.msg_key_cache.max_capacity(&self.id));
+        self.msg_key_cache.set_maximums(
+            self.id,
+            max_skip,
+            self.msg_key_cache.max_capacity(&self.id),
+        );
     }
 
     #[allow(dead_code)]
@@ -289,6 +294,9 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
     /// Try to encrypt the `plaintext`. See `ratchet_encrypt` for details.
     ///
     /// Fails with `EncryptUninit` when `self` is not yet initialized for encrypting.
+    ///
+    /// # Errors
+    /// `DecryptError`
     pub fn try_ratchet_encrypt<R: CryptoRng + RngCore>(
         &mut self,
         plaintext: &[u8],
@@ -393,6 +401,9 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
     /// further details.
     ///
     /// [specification]: https://signal.org/docs/specifications/doubleratchet/#decrypting-messages-1
+    ///
+    /// # Errors
+    /// `DecryptError`
     pub fn ratchet_decrypt(
         &mut self,
         header: &Header<CP::PublicKey>,
@@ -420,7 +431,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
     ) -> Result<(Diff<CP>, Vec<u8>), DecryptError> {
         use Diff::{CurrentChain, NextChain, OldKey};
         if let Some(mk) = self.msg_key_cache.get(&self.id, &h.dh, h.n) {
-            Ok((OldKey, CP::decrypt(mk, ct, ad)?))
+            Ok((OldKey, CP::decrypt(&mk, ct, ad)?))
         } else if self.dhr.as_ref() == Some(&h.dh) {
             let (ckr, mut mks) =
                 Self::skip_message_keys(self.ckr.as_ref().unwrap(), self.get_current_skip(h)?);
@@ -526,30 +537,34 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
 impl<'a, CP: CryptoProvider> TryFrom<&'a SessionState> for DoubleRatchet<CP> {
     type Error = DRError;
     fn try_from(session_state: &'a SessionState) -> Result<Self, Self::Error> {
-        Ok(
-            Self {
-                id: session_state.id,
-                dhs: CP::KeyPair::new_from_bytes(&session_state.dhs_priv, &session_state.dhs_pub)?,
-                dhr: if let Some(dhr) = session_state.dhr.clone() {
-                    Some(CP::new_public_key(&dhr).map_err(|_| DRError::InvalidKey)?)
-                } else { None },
-                rk: CP::new_root_key(&session_state.rk).map_err(|_| DRError::InvalidKey)?,
-                cks: if let Some(cks) = session_state.cks.clone() {
-                    Some(CP::new_chain_key(&cks).map_err(|_| DRError::InvalidKey)?)
-                } else { None },
-                ckr: if let Some(ckr) = session_state.ckr.clone() {
-                    Some(CP::new_chain_key(&ckr).map_err(|_| DRError::InvalidKey)?)
-                } else { None },
-                ns: session_state.ns,
-                nr: session_state.nr,
-                pn: session_state.pn,
-                msg_key_cache: KeyStore::new(), // TODO: fix this, its wrong!!!!
-            }
-        )
+        Ok(Self {
+            id: session_state.id,
+            dhs: CP::KeyPair::new_from_bytes(&session_state.dhs_priv, &session_state.dhs_pub)?,
+            dhr: if let Some(dhr) = session_state.dhr.clone() {
+                Some(CP::new_public_key(&dhr).map_err(|_| DRError::InvalidKey)?)
+            } else {
+                None
+            },
+            rk: CP::new_root_key(&session_state.rk).map_err(|_| DRError::InvalidKey)?,
+            cks: if let Some(cks) = session_state.cks.clone() {
+                Some(CP::new_chain_key(&cks).map_err(|_| DRError::InvalidKey)?)
+            } else {
+                None
+            },
+            ckr: if let Some(ckr) = session_state.ckr.clone() {
+                Some(CP::new_chain_key(&ckr).map_err(|_| DRError::InvalidKey)?)
+            } else {
+                None
+            },
+            ns: session_state.ns,
+            nr: session_state.nr,
+            pn: session_state.pn,
+            msg_key_cache: Arc::new(DefaultKeyStore::new()),
+        })
     }
 }
 
-/// SessionState requires the serde feature enablement
+/// `SessionState` requires the serde feature enablement
 /// it allows for persistence (save/recover) of a double ratchet
 /// state. It does not backup the Message Key Skip Store!
 #[cfg(feature = "serde")]
@@ -574,20 +589,26 @@ pub struct SessionState {
     nr: Counter,
     /// previous message number
     pn: Counter,
-    /// limit on the receive chain ratchet steps when trying 
-    /// to decrypt (per alice/bob chain). DoS protection
+    /// limit on the receive chain ratchet steps when trying
+    /// to decrypt (per alice/bob chain). `DoS` protection
     max_skip: usize,
-    ///  Maximum amount of skipped message keys that can 
+    ///  Maximum amount of skipped message keys that can
     /// be stored per alice/bob paring
     max_capacity: usize,
 }
 
 impl SessionState {
     /// encodes the session state to a json string
+    ///
+    /// # Errors
+    /// `serde_json::Error`
     pub fn encode(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string(self)
     }
     /// decodes a session state from a json &str
+    ///
+    /// # Errors
+    /// `serde_json::Error`
     pub fn decode(s: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(s)
     }
@@ -646,7 +667,7 @@ pub trait CryptoProvider {
     ///
     /// It is assumed that a `PublicKey` holds a valid key, so if any verification is required the
     /// constructor of this type would be a good place to do so.
-    type PublicKey: AsRef<[u8]> + Clone + Eq + Hash;
+    type PublicKey: AsRef<[u8]> + Debug + Clone + Eq + Hash;
 
     /// A private/public key-pair for use in the Diffie-Hellman calculation.
     type KeyPair: KeyPair<PublicKey = Self::PublicKey>;
@@ -711,8 +732,8 @@ pub trait CryptoProvider {
     ///
     /// It is assumed that a `PublicKey` holds a valid key, so if any verification is required the
     /// constructor of this type would be a good place to do so.
-    type PublicKey: AsRef<[u8]> + Clone + Eq + Hash;
-    /// creates a PublicKey, necessary for recovering an instance 
+    type PublicKey: AsRef<[u8]> + Debug + Clone + Eq + Hash;
+    /// creates a `PublicKey`, necessary for recovering an instance
     /// from a persisted session state
     fn new_public_key(key: &[u8]) -> Result<Self::PublicKey, DRError>;
 
@@ -724,13 +745,13 @@ pub trait CryptoProvider {
 
     /// A `RootKey` is used in the outer Diffie-Hellman ratchet.
     type RootKey: AsRef<[u8]>;
-    /// creates a RootKey, necessary for recovering an instance 
+    /// creates a `RootKey`, necessary for recovering an instance
     /// from a persisted session state
     fn new_root_key(key: &[u8]) -> Result<Self::RootKey, DRError>;
 
     /// A `ChainKey` is used in the inner symmetric ratchets.
     type ChainKey: AsRef<[u8]>;
-    /// creates a ChainKey, necessary for recovering an instance 
+    /// creates a `ChainKey`, necessary for recovering an instance
     /// from a persisted session state
     fn new_chain_key(key: &[u8]) -> Result<Self::ChainKey, DRError>;
 
@@ -739,7 +760,7 @@ pub trait CryptoProvider {
     /// The implementation of this type could be a complex type: for example an implementation that
     /// works by the encrypt-then-MAC paradigm may require a tuple consisting of an encryption key
     /// and a MAC key.
-    type MessageKey;
+    type MessageKey: Clone + Debug;
 
     /// Perform the Diffie-Hellman operation.
     fn diffie_hellman(us: &Self::KeyPair, them: &Self::PublicKey) -> Self::SharedSecret;
@@ -759,6 +780,9 @@ pub trait CryptoProvider {
     fn encrypt(key: &Self::MessageKey, plaintext: &[u8], associated_data: &[u8]) -> Vec<u8>;
 
     /// Verify-decrypt the ciphertext and associated data.
+    ///
+    /// # Errors
+    /// `DecryptError`
     fn decrypt(
         key: &Self::MessageKey,
         ciphertext: &[u8],
@@ -787,114 +811,9 @@ pub trait KeyPair {
 
     /// used for reinitialization using the persisted session state
     #[cfg(feature = "serde")]
-    fn new_from_bytes(private: &[u8], public: &[u8]) -> Result<Self, DRError> where Self: Sized;
-
-}
-
-// Maximum amount of skipped message keys that can be stored
-const DEFAULT_MKS_CAPACITY: usize = 2000;
-
-// A KeyStore holds the skipped `MessageKey`s.
-//
-// When messages can arrive out of order, the DoubleRatchet must store the MessageKeys
-// corresponding to the messages that were skipped over. See also the [specification] for further
-// discussion.
-//
-// [specification]: https://signal.org/docs/specifications/doubleratchet/#deletion-of-skipped-message-keys
-struct KeyStore<CP: CryptoProvider> {
-    key_cache: HashMap<u64, HashMap<CP::PublicKey, HashMap<Counter, CP::MessageKey>>>,
-    // id: (max_skip, max_capacity)
-    maximums: HashMap<u64, (usize, usize)>,
-}
-
-impl<CP> fmt::Debug for KeyStore<CP>
-where
-    CP: CryptoProvider,
-    CP::PublicKey: fmt::Debug,
-    CP::MessageKey: fmt::Debug,
-{
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "KeyStore Maximums({:?})\nkey_cache({:?})",
-            self.maximums, self.key_cache
-        )
-    }
-}
-
-impl<CP: CryptoProvider> KeyStore<CP> {
-    fn new() -> Self {
-        Self {
-            key_cache: HashMap::new(),
-            maximums: HashMap::new(),
-        }
-    }
-
-    fn max_skip(&self, id: &u64) -> usize {
-        self.maximums
-            .get(id)
-            .map(|m| m.0)
-            .unwrap_or(DEFAULT_MAX_SKIP)
-    }
-
-    fn max_capacity(&self, id: &u64) -> usize {
-        self.maximums
-            .get(id)
-            .map(|m| m.1)
-            .unwrap_or(DEFAULT_MKS_CAPACITY)
-    }
-
-
-    #[allow(dead_code)]
-    fn set_maximums(&mut self, id: u64, max_skip: usize, max_capacity: usize) {
-        self.maximums.insert(id, (max_skip, max_capacity));
-    }
-
-    // Get the MessageKey at `(dh, n)` if it is stored
-    fn get(&self, id: &u64, dh: &CP::PublicKey, n: Counter) -> Option<&CP::MessageKey> {
-        self.key_cache.get(id).and_then(|hm| hm.get(dh)?.get(&n))
-//        self.key_cache.get(dh)?.get(&n)
-    }
-
-    // Do `n` more MessageKeys fit in the KeyStore?
-    fn can_store(&self, id: &u64, n: usize) -> bool {
-        let current = self.key_cache.get(id).and_then(|hm|
-            Some(hm.values().map(HashMap::len).sum())
-        ).unwrap_or(0);
-        current + n <= self.max_capacity(id)
-    }
-
-    // Extend the storage with `mks`
-    //
-    // Keys are stored at `dh` and `n` counting upwards:
-    //   (dh, n  ): mks[0]
-    //   (dh, n+1): mks[1]
-    //   ...
-    fn extend(&mut self, id: u64, dh: &CP::PublicKey, n: Counter, mks: Vec<CP::MessageKey>) {
-        let values = (n..).zip(mks);
-        let reference = self.key_cache.entry(id).or_insert_with(HashMap::new);
-        if let Some(v) = reference.get_mut(dh) {
-            v.extend(values);
-        } else {
-            reference.insert(dh.clone(), values.collect());
-        }
-    }
-
-    // Remove the MessageKey at index `(dh, n)`
-    //
-    // Assumes the MessageKey is indeed stored.
-    fn remove(&mut self, id: &u64, dh: &CP::PublicKey, n: Counter) {
-        debug_assert!(self.key_cache.get(id).is_some_and(|hm| hm.contains_key(dh)));
-        if let Some(h1) = self.key_cache.get_mut(id) {
-            if let Some(h2) = h1.get_mut(dh) {
-                if h2.len() == 1 {
-                    _ = h1.remove(dh)
-                } else {
-                    _ = h2.remove(&n)
-                }
-            }
-        }
-    }
+    fn new_from_bytes(private: &[u8], public: &[u8]) -> Result<Self, DRError>
+    where
+        Self: Sized;
 }
 
 // Required information for updating the state after successful decryption
@@ -1030,21 +949,21 @@ pub mod mock {
                 Ok(Vec::from(&ct[3..ct.len() - ad.len()]))
             }
         }
-        
+
         fn new_public_key(key: &[u8]) -> Result<Self::PublicKey, DRError> {
             if key.len() != 1 {
                 return Err(DRError::InvalidKey);
             }
             Ok(PublicKey([key[0]]))
         }
-        
+
         fn new_root_key(key: &[u8]) -> Result<Self::RootKey, DRError> {
             if key.len() != 2 {
                 return Err(DRError::InvalidKey);
             }
             Ok([key[0], key[1]])
         }
-        
+
         fn new_chain_key(key: &[u8]) -> Result<Self::ChainKey, DRError> {
             if key.len() != 3 {
                 return Err(DRError::InvalidKey);
@@ -1083,7 +1002,10 @@ pub mod mock {
 
         /// used for reinitialization using the persisted session state
         #[cfg(feature = "serde")]
-        fn new_from_bytes(private: &[u8], public: &[u8]) -> Result<Self, DRError> where Self: Sized {
+        fn new_from_bytes(private: &[u8], public: &[u8]) -> Result<Self, DRError>
+        where
+            Self: Sized,
+        {
             if private.len() != 1 || public.len() != 1 {
                 return Err(DRError::InvalidData);
             }
@@ -1117,6 +1039,8 @@ pub mod mock {
 
 #[cfg(test)]
 mod tests {
+    use core::any::Any;
+
     use super::*;
 
     type DR = DoubleRatchet<mock::CryptoProvider>;
@@ -1190,7 +1114,7 @@ mod tests {
     fn test_asymmetric_setup_with_session_state() {
         let mut rng = mock::Rng::default();
         let (mut alice, bob) = asymmetric_setup(&mut rng);
-        let bob_session_state = bob.session_state().encode().unwrap();        
+        let bob_session_state = bob.session_state().encode().unwrap();
 
         // Alice can encrypt, Bob can't
         let (pt_a, ad_a) = (b"Hi Bobby", b"A2B");
@@ -1472,9 +1396,15 @@ mod tests {
             let (h_a, ct_a) = alice.ratchet_encrypt(b"Hello Bob", ad_a, &mut rng);
             bob.ratchet_decrypt(&h_a, &ct_a, ad_a).unwrap();
             stored += bob.max_skip();
-            let _ = &bob
-                .msg_key_cache
+            // We need to downcast the trait object *inside* the Arc.
+            // `&*bob.msg_key_cache` dereferences the Arc to get `&(dyn MessageKeyCacheTrait<...>)`.
+            // Since `MessageKeyCacheTrait: Any`, this can be downcast.
+            let default_key_store = (&*bob.msg_key_cache as &dyn Any)
+                .downcast_ref::<DefaultKeyStore<mock::CryptoProvider>>()
+                .unwrap();
+            let _ = default_key_store
                 .key_cache
+                .borrow()
                 .values()
                 .map(|hm| hm.len())
                 .sum::<usize>();
