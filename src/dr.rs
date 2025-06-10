@@ -6,13 +6,9 @@ use core::{cmp, fmt, hash::Hash};
 use rand_core::{CryptoRng, OsRng, RngCore};
 
 #[cfg(not(feature = "std"))]
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{string::String, sync::Arc, vec::Vec};
 #[cfg(feature = "std")]
-use std::error::Error;
-#[cfg(feature = "std")]
-use std::string::String;
-#[cfg(feature = "std")]
-use std::{sync::Arc, vec::Vec};
+use std::{error::Error, string::String, sync::Arc, vec::Vec};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

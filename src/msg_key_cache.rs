@@ -1,11 +1,13 @@
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
+
 use core::{
     any::Any,
     cell::RefCell,
     fmt::{self, Debug},
 };
 use hashbrown::HashMap;
+
 #[cfg(feature = "std")]
 use std::vec::Vec;
 
