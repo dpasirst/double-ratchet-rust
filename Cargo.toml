@@ -22,7 +22,6 @@ serde_json = { version = "1.0.140", optional = true }
 
 [dev-dependencies]
 clear_on_drop = "0.2"
-generic-array = "0.14.7"
 hkdf = "0.12.4"
 hmac = "0.12.1"
 sha2 = "0.10.9"
