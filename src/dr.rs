@@ -247,6 +247,17 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
         }
     }
 
+    /// # Returns
+    /// the instance `id`
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// sets the instance `id`
+    pub fn set_id(&mut self, id: u64) {
+        self.id = id;
+    }
+
     /// returns a copy of `MessageKeyCacheTrait` instance currently in use
     pub fn message_key_cache(&self) -> Arc<dyn MessageKeyCacheTrait<CP>> {
         self.msg_key_cache.clone()
@@ -268,14 +279,14 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
 
     /// maximum number of skipped entries to prevent `DoS`
     #[allow(dead_code)]
-    fn max_skip(&self) -> usize {
+    pub fn max_skip(&self) -> usize {
         self.msg_key_cache.max_skip(&self.id)
     }
 
     /// set the maximum number of skipped entries to prevent `DoS`
     /// this should be called after `set_message_key_cache`
     #[allow(dead_code)]
-    fn set_max_skip(&mut self, max_skip: usize) {
+    pub fn set_max_skip(&mut self, max_skip: usize) {
         self.msg_key_cache.set_maximums(
             self.id,
             max_skip,
@@ -283,9 +294,12 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
         );
     }
 
+    /// allows the export of the current double ratchet state for persistence
+    /// WARNING: the includes the current private keys, etc. and should 
+    /// be used with caution
     #[allow(dead_code)]
     #[cfg(feature = "serde")]
-    fn session_state(&self) -> SessionState {
+    pub fn session_state(&self) -> SessionState {
         SessionState {
             id: self.id,
             dhs_priv: self.dhs.private_bytes(),
