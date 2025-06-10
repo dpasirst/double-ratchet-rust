@@ -697,7 +697,7 @@ pub trait CryptoProvider {
     ///
     /// It is assumed that a `PublicKey` holds a valid key, so if any verification is required the
     /// constructor of this type would be a good place to do so.
-    type PublicKey: AsRef<[u8]> + Debug + Clone + Eq + Hash;
+    type PublicKey: AsRef<[u8]> + Debug + Clone + Eq + Hash + Send + Sync;
 
     /// A private/public key-pair for use in the Diffie-Hellman calculation.
     type KeyPair: KeyPair<PublicKey = Self::PublicKey>;
@@ -716,7 +716,7 @@ pub trait CryptoProvider {
     /// The implementation of this type could be a complex type: for example an implementation that
     /// works by the encrypt-then-MAC paradigm may require a tuple consisting of an encryption key
     /// and a MAC key.
-    type MessageKey;
+    type MessageKey: Send + Sync;
 
     /// Perform the Diffie-Hellman operation.
     fn diffie_hellman(us: &Self::KeyPair, them: &Self::PublicKey) -> Self::SharedSecret;
@@ -762,7 +762,7 @@ pub trait CryptoProvider {
     ///
     /// It is assumed that a `PublicKey` holds a valid key, so if any verification is required the
     /// constructor of this type would be a good place to do so.
-    type PublicKey: AsRef<[u8]> + Debug + Clone + Eq + Hash;
+    type PublicKey: AsRef<[u8]> + Debug + Clone + Eq + Hash + Send + Sync;
     /// creates a `PublicKey`, necessary for recovering an instance
     /// from a persisted session state
     fn new_public_key(key: &[u8]) -> Result<Self::PublicKey, DRError>;
@@ -790,7 +790,7 @@ pub trait CryptoProvider {
     /// The implementation of this type could be a complex type: for example an implementation that
     /// works by the encrypt-then-MAC paradigm may require a tuple consisting of an encryption key
     /// and a MAC key.
-    type MessageKey: Clone + Debug;
+    type MessageKey: Clone + Debug + Send + Sync;
 
     /// Perform the Diffie-Hellman operation.
     fn diffie_hellman(us: &Self::KeyPair, them: &Self::PublicKey) -> Self::SharedSecret;
@@ -1434,7 +1434,7 @@ mod tests {
                 .unwrap();
             let _ = default_key_store
                 .key_cache
-                .borrow()
+                .lock()
                 .values()
                 .map(|hm| hm.len())
                 .sum::<usize>();
