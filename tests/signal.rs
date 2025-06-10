@@ -24,26 +24,27 @@
 //!
 //! [`clear_on_drop`]: https://crates.io/crates/clear_on_drop
 //! [specification]: https://signal.org/docs/specifications/doubleratchet/#recommended-cryptographic-algorithms
-/*
+
 use aes::Aes256;
-use aes::cipher::BlockCipher;
-//use block_padding::Pkcs7;
-//use cbc::{Encryptor, Decryptor, cipher};
-use block_modes::{block_padding::Pkcs7, BlockMode, Cbc};
+use cbc::cipher::block_padding::Pkcs7;
+use cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use clear_on_drop::clear::Clear;
 use double_ratchet::{self as dr, KeyPair as _};
 use generic_array::{typenum::U32, GenericArray};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use rand_core::{CryptoRng, RngCore, OsRng};
-//use rand_os::OsRng;
 use sha2::Sha256;
+use std::convert::TryInto;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use subtle::ConstantTimeEq;
-use noah_x25519_dalek::{self, SharedSecret};
+use x25519_dalek::{self, SharedSecret};
 
 pub type SignalDR = dr::DoubleRatchet<SignalCryptoProvider>;
+
+type Aes256CbcEnc = cbc::Encryptor<Aes256>;
+type Aes256CbcDec = cbc::Decryptor<Aes256>;
 
 pub struct SignalCryptoProvider;
 
@@ -63,7 +64,7 @@ impl dr::CryptoProvider for SignalCryptoProvider {
     fn kdf_rk(rk: &SymmetricKey, s: &SharedSecret) -> (SymmetricKey, SymmetricKey) {
         let salt = Some(rk.0.as_slice());
         let ikm = s.as_bytes();
-        let prk = Hkdf::<Sha256>::extract(salt, ikm);
+        let prk = Hkdf::<Sha256>::new(salt, ikm);
         let info = &b"WhisperRatchet"[..];
         let mut okm = [0; 64];
         prk.expand(&info, &mut okm).unwrap();
@@ -74,31 +75,30 @@ impl dr::CryptoProvider for SignalCryptoProvider {
 
     fn kdf_ck(ck: &SymmetricKey) -> (SymmetricKey, SymmetricKey) {
         let key = ck.0.as_slice();
-        let mut mac = Hmac::<Sha256>::new_varkey(key).unwrap();
-        mac.input(&[0x01]);
-        let mk = mac.result_reset().code();
-        mac.input(&[0x02]);
-        let ck = mac.result().code();
+        let mut mac = Hmac::<Sha256>::new_from_slice(key).unwrap();
+        mac.update(&[0x01]);
+        let mk = mac.finalize().into_bytes();
+        let mut mac = Hmac::<Sha256>::new_from_slice(key).unwrap();
+        mac.update(&[0x02]);
+        let ck = mac.finalize().into_bytes();
         (SymmetricKey(ck), SymmetricKey(mk))
     }
 
     fn encrypt(key: &SymmetricKey, pt: &[u8], ad: &[u8]) -> Vec<u8> {
         let ikm = key.0.as_slice();
-        let prk = Hkdf::<Sha256>::extract(None, ikm);
+        let prk = Hkdf::<Sha256>::new(None, ikm);
         let info = b"WhisperMessageKeys";
         let mut okm = [0; 80];
         prk.expand(info, &mut okm).unwrap();
-        let ek = GenericArray::<u8, <Aes256 as BlockCipher>::KeySize>::from_slice(&okm[..32]);
-        let mk = GenericArray::<u8, <Hmac<Sha256> as Mac>::OutputSize>::from_slice(&okm[32..64]);
-        let iv = GenericArray::<u8, <Aes256 as BlockCipher>::BlockSize>::from_slice(&okm[64..]);
-
-        let cipher = Cbc::<Aes256, Pkcs7>::new_fix(ek, iv);
-        let mut ct = cipher.encrypt_vec(pt);
-
-        let mut mac = Hmac::<Sha256>::new_varkey(mk).unwrap();
-        mac.input(ad);
-        mac.input(&ct);
-        let tag = mac.result().code();
+        let ek = GenericArray::clone_from_slice(&okm[..32]);
+        let mk: GenericArray<u8, U32> = GenericArray::clone_from_slice(&okm[32..64]);
+        let iv = GenericArray::clone_from_slice(&okm[64..]);
+        let cipher = Aes256CbcEnc::new(&ek, &iv);
+        let mut ct = cipher.encrypt_padded_vec_mut::<Pkcs7>(pt);
+        let mut mac = Hmac::<Sha256>::new_from_slice(&mk).unwrap();
+        mac.update(ad);
+        mac.update(&ct);
+        let tag = mac.finalize().into_bytes();
         ct.extend((&tag[..8]).into_iter());
 
         okm.clear();
@@ -107,25 +107,25 @@ impl dr::CryptoProvider for SignalCryptoProvider {
 
     fn decrypt(key: &SymmetricKey, ct: &[u8], ad: &[u8]) -> Result<Vec<u8>, dr::DecryptError> {
         let ikm = key.0.as_slice();
-        let prk = Hkdf::<Sha256>::extract(None, ikm);
+        let prk = Hkdf::<Sha256>::new(None, ikm);
         let info = b"WhisperMessageKeys";
         let mut okm = [0; 80];
         prk.expand(info, &mut okm).unwrap();
-        let dk = GenericArray::<u8, <Aes256 as BlockCipher>::KeySize>::from_slice(&okm[..32]);
-        let mk = GenericArray::<u8, <Hmac<Sha256> as Mac>::OutputSize>::from_slice(&okm[32..64]);
-        let iv = GenericArray::<u8, <Aes256 as BlockCipher>::BlockSize>::from_slice(&okm[64..]);
+        let dk = GenericArray::clone_from_slice(&okm[..32]);
+        let mk: GenericArray<u8, U32> = GenericArray::clone_from_slice(&okm[32..64]);
+        let iv = GenericArray::clone_from_slice(&okm[64..]);
 
         let ct_len = ct.len() - 8;
-        let mut mac = Hmac::<Sha256>::new_varkey(mk).unwrap();
-        mac.input(ad);
-        mac.input(&ct[..ct_len]);
-        let tag = mac.result().code();
-        if bool::from(!(&tag.as_ref()[..8]).ct_eq(&ct[ct_len..])) {
+        let mut mac = Hmac::<Sha256>::new_from_slice(&mk).unwrap();
+        mac.update(ad);
+        mac.update(&ct[..ct_len]);
+        let tag = mac.finalize().into_bytes();
+        if bool::from(!(&tag[..8]).ct_eq(&ct[ct_len..])) {
             okm.clear();
             return Err(dr::DecryptError::DecryptFailure);
         }
-        let cipher = Cbc::<Aes256, Pkcs7>::new_fix(dk, iv);
-        if let Ok(pt) = cipher.decrypt_vec(&ct[..ct_len]) {
+        let cipher = Aes256CbcDec::new(&dk, &iv);
+        if let Ok(pt) = cipher.decrypt_padded_vec_mut::<Pkcs7>(&ct[..ct_len]) {
             okm.clear();
             Ok(pt)
         } else {
@@ -133,10 +133,25 @@ impl dr::CryptoProvider for SignalCryptoProvider {
             Err(dr::DecryptError::DecryptFailure)
         }
     }
+    
+    fn new_public_key(key: &[u8]) -> Result<Self::PublicKey, double_ratchet::DRError> {
+        let key: [u8; 32] = key.try_into().map_err(|_| double_ratchet::DRError::InvalidKey)?;
+        Ok(PublicKey(x25519_dalek::PublicKey::from(key)))
+    }
+    
+    fn new_root_key(key: &[u8]) -> Result<Self::RootKey, double_ratchet::DRError> {
+        let key= GenericArray::<u8, U32>::clone_from_slice(key);
+        Ok(SymmetricKey(key))
+    }
+    
+    fn new_chain_key(key: &[u8]) -> Result<Self::ChainKey, double_ratchet::DRError> {
+        let key= GenericArray::<u8, U32>::clone_from_slice(key);
+        Ok(SymmetricKey(key))
+    }
 }
 
 #[derive(Clone, Debug)]
-pub struct PublicKey(noah_x25519_dalek::PublicKey);
+pub struct PublicKey(x25519_dalek::PublicKey);
 
 impl Eq for PublicKey {}
 
@@ -152,9 +167,9 @@ impl Hash for PublicKey {
     }
 }
 
-impl<'a> From<&'a noah_x25519_dalek::StaticSecret> for PublicKey {
-    fn from(private: &'a noah_x25519_dalek::StaticSecret) -> PublicKey {
-        PublicKey(noah_x25519_dalek::PublicKey::from(private))
+impl<'a> From<&'a x25519_dalek::StaticSecret> for PublicKey {
+    fn from(private: &'a x25519_dalek::StaticSecret) -> PublicKey {
+        PublicKey(x25519_dalek::PublicKey::from(private))
     }
 }
 
@@ -165,7 +180,7 @@ impl AsRef<[u8]> for PublicKey {
 }
 
 pub struct KeyPair {
-    private: noah_x25519_dalek::StaticSecret,
+    private: x25519_dalek::StaticSecret,
     public: PublicKey,
 }
 
@@ -194,7 +209,7 @@ impl dr::KeyPair for KeyPair {
     type PublicKey = PublicKey;
 
     fn new<R: CryptoRng + RngCore>(rng: &mut R) -> KeyPair {
-        let private = noah_x25519_dalek::StaticSecret::new(rng);
+        let private = x25519_dalek::StaticSecret::random_from_rng(rng);
         let public = PublicKey::from(&private);
         KeyPair { private, public }
     }
@@ -202,9 +217,25 @@ impl dr::KeyPair for KeyPair {
     fn public(&self) -> &PublicKey {
         &self.public
     }
+    
+    fn private_bytes(&self) -> Vec<u8> {
+        self.private.to_bytes().to_vec()
+    }
+    
+    fn new_from_bytes(private: &[u8], public: &[u8]) -> Result<Self, double_ratchet::DRError>
+    where
+        Self: Sized 
+    {
+        let private: [u8; 32] = private.try_into().map_err(|_| double_ratchet::DRError::InvalidKey)?;
+        let public: [u8; 32] = public.try_into().map_err(|_| double_ratchet::DRError::InvalidKey)?;
+        Ok(KeyPair {
+            private: x25519_dalek::StaticSecret::from(private),
+            public: PublicKey::from(&x25519_dalek::StaticSecret::from(public)),
+        })
+    }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct SymmetricKey(GenericArray<u8, U32>);
 
 impl fmt::Debug for SymmetricKey {
@@ -219,6 +250,13 @@ impl fmt::Debug for SymmetricKey {
     }
 }
 
+impl AsRef<[u8]> for SymmetricKey {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+
+
 impl Drop for SymmetricKey {
     fn drop(&mut self) {
         self.0.clear();
@@ -227,7 +265,7 @@ impl Drop for SymmetricKey {
 
 #[test]
 fn signal_session() {
-    let mut rng = OsRng::new().unwrap();
+    let mut rng = OsRng;
     let (ad_a, ad_b) = (b"A2B:SessionID=42", b"B2A:SessionID=42");
 
     // Copy some values (these are usually the outcome of an X3DH key exchange)
@@ -289,4 +327,4 @@ fn signal_session() {
         .ratchet_decrypt(&h_a_2, b"Incorrect ciphertext", ad_a)
         .is_err());
 }
-*/
+
