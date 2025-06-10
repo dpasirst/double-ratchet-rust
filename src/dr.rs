@@ -251,6 +251,20 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
         }
     }
 
+    /// returns a copy of `MessageKeyCacheTrait` instance currently in use
+    pub fn message_key_cache(&self) -> Arc<dyn MessageKeyCacheTrait<CP>> {
+        self.msg_key_cache.clone()
+    }
+
+    /// sets the `MessageKeyCacheTrait` instance for use as part of skipped messages
+    /// the can be set immediately after creating the new `DoubleRatchet` instance
+    /// or more specifically, before the the instance is used.
+    /// if nothing is set, it will default to a memory only KeyCache
+    pub fn set_message_key_cache(&mut self, cache: Arc<dyn MessageKeyCacheTrait<CP>>) {
+        self.msg_key_cache = cache;
+    }
+
+
     /// The current public key that can be shared with the other party
     pub fn public_key(&self) -> &CP::PublicKey {
         self.dhs.public()
@@ -263,6 +277,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
     }
 
     /// set the maximum number of skipped entries to prevent `DoS`
+    /// this should be called after `set_message_key_cache`
     #[allow(dead_code)]
     fn set_max_skip(&mut self, max_skip: usize) {
         self.msg_key_cache.set_maximums(
@@ -534,33 +549,38 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
 }
 
 #[cfg(feature = "serde")]
-impl<'a, CP: CryptoProvider> TryFrom<&'a SessionState> for DoubleRatchet<CP> {
+impl<'a, CP: CryptoProvider> TryFrom<&'a (SessionState, Option<Arc<dyn MessageKeyCacheTrait<CP>>>)> for DoubleRatchet<CP> {
     type Error = DRError;
-    fn try_from(session_state: &'a SessionState) -> Result<Self, Self::Error> {
-        Ok(Self {
-            id: session_state.id,
-            dhs: CP::KeyPair::new_from_bytes(&session_state.dhs_priv, &session_state.dhs_pub)?,
-            dhr: if let Some(dhr) = session_state.dhr.clone() {
+    fn try_from(state: &'a (SessionState, Option<Arc<dyn MessageKeyCacheTrait<CP>>>)) -> Result<Self, Self::Error> {
+        let mut instance = Self {
+            id: state.0.id,
+            dhs: CP::KeyPair::new_from_bytes(&state.0.dhs_priv, &state.0.dhs_pub)?,
+            dhr: if let Some(dhr) = state.0.dhr.clone() {
                 Some(CP::new_public_key(&dhr).map_err(|_| DRError::InvalidKey)?)
             } else {
                 None
             },
-            rk: CP::new_root_key(&session_state.rk).map_err(|_| DRError::InvalidKey)?,
-            cks: if let Some(cks) = session_state.cks.clone() {
+            rk: CP::new_root_key(&state.0.rk).map_err(|_| DRError::InvalidKey)?,
+            cks: if let Some(cks) = state.0.cks.clone() {
                 Some(CP::new_chain_key(&cks).map_err(|_| DRError::InvalidKey)?)
             } else {
                 None
             },
-            ckr: if let Some(ckr) = session_state.ckr.clone() {
+            ckr: if let Some(ckr) = state.0.ckr.clone() {
                 Some(CP::new_chain_key(&ckr).map_err(|_| DRError::InvalidKey)?)
             } else {
                 None
             },
-            ns: session_state.ns,
-            nr: session_state.nr,
-            pn: session_state.pn,
+            ns: state.0.ns,
+            nr: state.0.nr,
+            pn: state.0.pn,
             msg_key_cache: Arc::new(DefaultKeyStore::new()),
-        })
+        };
+        if let Some(key_cache) = state.1.clone() {
+            instance.set_message_key_cache(key_cache);
+        }
+        instance.set_max_skip(state.0.max_skip);
+        Ok(instance)
     }
 }
 
@@ -1123,7 +1143,7 @@ mod tests {
         let alice_session_state = alice.session_state().encode().unwrap();
 
         let bob_session = SessionState::decode(&bob_session_state).unwrap();
-        let mut bob = DR::try_from(&bob_session).unwrap();
+        let mut bob = DR::try_from(&(bob_session, None)).unwrap();
         assert_eq!(
             Err(EncryptUninit),
             bob.try_ratchet_encrypt(pt_b, ad_b, &mut rng)
@@ -1136,7 +1156,7 @@ mod tests {
         // but after decryption Bob can encrypt
         let (h_b, ct_b) = bob.ratchet_encrypt(pt_b, ad_b, &mut rng);
         let alice_session = SessionState::decode(&alice_session_state).unwrap();
-        let mut alice = DR::try_from(&alice_session).unwrap();
+        let mut alice = DR::try_from(&(alice_session, None)).unwrap();
         assert_eq!(
             Ok(Vec::from(&pt_b[..])),
             alice.ratchet_decrypt(&h_b, &ct_b, ad_b)
