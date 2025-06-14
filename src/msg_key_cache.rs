@@ -40,8 +40,8 @@ pub trait MessageKeyCacheTrait<CP: CryptoProvider>: Any + Debug + Send + Sync {
     /// Get the `MessageKey` at `(dh, n)` if it is stored
     fn get(&self, id: &u64, dh: &CP::PublicKey, n: Counter) -> Option<CP::MessageKey>;
 
-    /// Do `n` more `MessageKeys` fit in the `KeyStore`?
-    fn can_store(&self, id: &u64, n: usize) -> bool;
+    /// Do `n` more `MessageKeys` fit in the `KeyStore` for `dh` chain?
+    fn can_store(&self, id: &u64, dh: &CP::PublicKey, n: usize) -> bool;
 
     /// Extend the storage with `mks`
     ///
@@ -131,7 +131,7 @@ impl<CP: CryptoProvider + 'static> MessageKeyCacheTrait<CP> for DefaultKeyStore<
             .and_then(|hm| hm.get(dh)?.get(&n).cloned())
     }
 
-    fn can_store(&self, id: &u64, n: usize) -> bool {
+    fn can_store(&self, id: &u64, _dh: &CP::PublicKey, n: usize) -> bool {
         let current = self
             .key_cache
             .lock()

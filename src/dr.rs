@@ -478,7 +478,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
                 .ok_or(DecryptError::MessageKeyNotFound)? as usize;
         if self.msg_key_cache.max_skip(&self.id) < skip {
             Err(DecryptError::SkipTooLarge)
-        } else if self.msg_key_cache.can_store(&self.id, skip) {
+        } else if self.msg_key_cache.can_store(&self.id, &h.dh, skip) {
             Ok(skip)
         } else {
             Err(DecryptError::StorageFull)
@@ -498,7 +498,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
             Err(DecryptError::SkipTooLarge)
         } else if self
             .msg_key_cache
-            .can_store(&self.id, (prev_skip + skip).saturating_sub(1))
+            .can_store(&self.id, &h.dh, (prev_skip + skip).saturating_sub(1))
         {
             Ok(skip)
         } else {
