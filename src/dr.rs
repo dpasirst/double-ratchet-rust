@@ -790,7 +790,7 @@ pub trait CryptoProvider {
     /// The implementation of this type could be a complex type: for example an implementation that
     /// works by the encrypt-then-MAC paradigm may require a tuple consisting of an encryption key
     /// and a MAC key.
-    type MessageKey: Clone + Debug + Send + Sync;
+    type MessageKey: Clone + Debug + Send + Sync + Hash;
 
     /// Perform the Diffie-Hellman operation.
     fn diffie_hellman(us: &Self::KeyPair, them: &Self::PublicKey) -> Self::SharedSecret;
