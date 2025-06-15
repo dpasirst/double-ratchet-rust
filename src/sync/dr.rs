@@ -13,7 +13,7 @@ use std::{error::Error, string::String, sync::Arc, vec::Vec};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-use crate::{DefaultKeyStore, MessageKeyCacheTrait};
+use crate::{DRError, sync::{DefaultKeyStore, MessageKeyCacheTrait}};
 
 // TODO: avoid heap allocations in encrypt/decrypt interfaces
 // TODO: HeaderEncrypted version
@@ -910,27 +910,6 @@ impl fmt::Display for DecryptError {
     }
 }
 
-/// General Errors
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DRError {
-    /// Data is invalid or cannot be processed
-    InvalidData,
-    /// Key is invalid or cannot be processed
-    InvalidKey,
-}
-
-#[cfg(feature = "std")]
-impl Error for DRError {}
-
-impl fmt::Display for DRError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use DRError::{InvalidData, InvalidKey};
-        match self {
-            InvalidData => write!(f, "Data is invalid or cannot be processed"),
-            InvalidKey => write!(f, "Key is invalid or cannot be processed"),
-        }
-    }
-}
 
 // Create a mock CryptoProvider for testing purposes. See `tests/signal.rs` for a proper example
 // implementation.

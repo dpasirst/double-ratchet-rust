@@ -30,7 +30,7 @@ use cbc::cipher::block_padding::Pkcs7;
 use cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use cipher::generic_array::{typenum::U32, GenericArray};
 use clear_on_drop::clear::Clear;
-use double_ratchet::{self as dr, KeyPair as _};
+use double_ratchet::sync::{self as dr, KeyPair as _};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use rand_core::{CryptoRng, RngCore, OsRng};

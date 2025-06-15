@@ -13,7 +13,7 @@ use hashbrown::HashMap;
 #[cfg(feature = "std")]
 use std::vec::Vec;
 
-use crate::{Counter, CryptoProvider};
+use crate::sync::{Counter, CryptoProvider};
 
 /// Upper limit on the receive chain ratchet steps when trying to decrypt. Prevents a
 /// denial-of-service attack where the attacker
