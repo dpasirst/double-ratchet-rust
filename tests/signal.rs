@@ -236,7 +236,7 @@ impl dr::KeyPair for KeyPair {
     }
 }
 
-#[derive(Default, Clone, Hash)]
+#[derive(Default, Clone, Hash, PartialEq, Eq)]
 pub struct SymmetricKey(GenericArray<u8, U32>);
 
 impl fmt::Debug for SymmetricKey {
