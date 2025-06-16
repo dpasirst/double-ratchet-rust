@@ -19,4 +19,5 @@ pub mod sync;
 pub mod async_;
 
 /// include common/shared definitions
-pub mod common;
+mod common;
+pub use common::*;
