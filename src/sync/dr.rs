@@ -10,14 +10,17 @@ use alloc::{sync::Arc, vec::Vec};
 #[cfg(feature = "std")]
 use std::{sync::Arc, vec::Vec};
 
-
 #[cfg(feature = "serde")]
 use crate::common::SessionState;
-use crate::{common::{Counter, CryptoProvider, DRError, DecryptError, Diff, EncryptUninit, Header, KeyPair}, sync::{DefaultKeyStore, MessageKeyCacheTrait}};
+use crate::{
+    common::{
+        Counter, CryptoProvider, DRError, DecryptError, Diff, EncryptUninit, Header, KeyPair,
+    },
+    sync::{DefaultKeyStore, MessageKeyCacheTrait},
+};
 
 // TODO: avoid heap allocations in encrypt/decrypt interfaces
 // TODO: HeaderEncrypted version
-
 
 /// The `DoubleRatchet` can encrypt/decrypt messages while providing forward secrecy and
 /// post-compromise security.
@@ -269,7 +272,6 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
         self.msg_key_cache = cache;
     }
 
-
     /// The current public key that can be shared with the other party
     pub fn public_key(&self) -> &CP::PublicKey {
         self.dhs.public()
@@ -287,9 +289,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
     /// based on the key cache implementation
     #[allow(dead_code)]
     pub fn set_max_skip(&self, max_skip: usize) {
-        self.msg_key_cache.set_max_skip(
-            max_skip
-        );
+        self.msg_key_cache.set_max_skip(max_skip);
     }
 
     /// maximum number of skipped capacity to prevent `DoS`
@@ -304,13 +304,11 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
     /// based on the key cache implementation
     #[allow(dead_code)]
     pub fn set_max_capacity(&self, max_capacity: usize) {
-        self.msg_key_cache.set_max_capacity(
-            max_capacity
-        );
+        self.msg_key_cache.set_max_capacity(max_capacity);
     }
 
     /// allows the export of the current double ratchet state for persistence
-    /// WARNING: the includes the current private keys, etc. and should 
+    /// WARNING: the includes the current private keys, etc. and should
     /// be used with caution
     #[allow(dead_code)]
     #[cfg(feature = "serde")]
@@ -509,10 +507,11 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
         let skip = h.n as usize;
         if self.msg_key_cache.max_skip() < cmp::max(prev_skip, skip) {
             Err(DecryptError::SkipTooLarge)
-        } else if self
-            .msg_key_cache
-            .can_store(&self.id, &h.dh, (prev_skip + skip).saturating_sub(1))
-        {
+        } else if self.msg_key_cache.can_store(
+            &self.id,
+            &h.dh,
+            (prev_skip + skip).saturating_sub(1),
+        ) {
             Ok(skip)
         } else {
             Err(DecryptError::StorageFull)
@@ -572,9 +571,13 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
 }
 
 #[cfg(feature = "serde")]
-impl<'a, CP: CryptoProvider> TryFrom<&'a (SessionState, Option<Arc<dyn MessageKeyCacheTrait<CP>>>)> for DoubleRatchet<CP> {
+impl<'a, CP: CryptoProvider> TryFrom<&'a (SessionState, Option<Arc<dyn MessageKeyCacheTrait<CP>>>)>
+    for DoubleRatchet<CP>
+{
     type Error = DRError;
-    fn try_from(state: &'a (SessionState, Option<Arc<dyn MessageKeyCacheTrait<CP>>>)) -> Result<Self, Self::Error> {
+    fn try_from(
+        state: &'a (SessionState, Option<Arc<dyn MessageKeyCacheTrait<CP>>>),
+    ) -> Result<Self, Self::Error> {
         let mut instance = Self {
             id: state.0.id,
             dhs: CP::KeyPair::new_from_bytes(&state.0.dhs_priv, &state.0.dhs_pub)?,
@@ -605,7 +608,6 @@ impl<'a, CP: CryptoProvider> TryFrom<&'a (SessionState, Option<Arc<dyn MessageKe
         Ok(instance)
     }
 }
-
 
 // Create a mock CryptoProvider for testing purposes. See `tests/signal.rs` for a proper example
 // implementation.
@@ -647,7 +649,11 @@ pub mod mock {
             ct
         }
 
-        fn decrypt(mk: &[u8; 3], ct: &[u8], ad: &[u8]) -> Result<Vec<u8>, crate::common::DecryptError> {
+        fn decrypt(
+            mk: &[u8; 3],
+            ct: &[u8],
+            ad: &[u8],
+        ) -> Result<Vec<u8>, crate::common::DecryptError> {
             if ct.len() < 3 + ad.len() || ct[..3] != mk[..] || !ct.ends_with(ad) {
                 Err(crate::common::DecryptError::DecryptFailure)
             } else {

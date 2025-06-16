@@ -17,7 +17,6 @@ use std::{boxed::Box, vec::Vec};
 
 use crate::common::{Counter, CryptoProvider, DEFAULT_MAX_SKIP, DEFAULT_MKS_CAPACITY};
 
-
 /// A `MessageKeyCacheTrait` holds the skipped `MessageKey`s.
 ///
 /// When messages can arrive out of order, the `DoubleRatchet` must store the `MessageKeys`
@@ -63,7 +62,8 @@ pub struct DefaultKeyStore<CP: CryptoProvider> {
     /// cache stores the skipped keys
     /// `[id : [PublicKey : [ Counter : MessageKey ] ]`
     #[allow(clippy::type_complexity)]
-    pub key_cache: SpinMutex<HashMap<u64, HashMap<CP::PublicKey, HashMap<Counter, CP::MessageKey>>>>,
+    pub key_cache:
+        SpinMutex<HashMap<u64, HashMap<CP::PublicKey, HashMap<Counter, CP::MessageKey>>>>,
     /// see DEFAULT_MAX_SKIP
     pub max_skip: SpinMutex<usize>,
     /// see DEFAULT_MKS_CAPACITY
@@ -80,7 +80,9 @@ where
         write!(
             f,
             "KeyStore Max skip {}, Max capacity {},\nkey_cache({:?})",
-            *self.max_skip.lock(), *self.message_key_max_capacity.lock(), self.key_cache.lock().raw_entry()
+            *self.max_skip.lock(),
+            *self.message_key_max_capacity.lock(),
+            self.key_cache.lock().raw_entry()
         )
     }
 }
@@ -106,26 +108,22 @@ impl<CP: CryptoProvider + 'static> Default for DefaultKeyStore<CP> {
 #[async_trait]
 impl<CP: CryptoProvider + 'static> MessageKeyCacheTrait<CP> for DefaultKeyStore<CP> {
     fn max_skip(&self) -> usize {
-        *self.max_skip
-            .lock()
+        *self.max_skip.lock()
     }
 
     fn max_capacity(&self) -> usize {
-        *self.message_key_max_capacity
-            .lock()
+        *self.message_key_max_capacity.lock()
     }
 
     #[allow(dead_code)]
     fn set_max_skip(&self, max_skip: usize) {
-        let mut ms = self.max_skip
-            .lock();
+        let mut ms = self.max_skip.lock();
         *ms = max_skip;
     }
 
     #[allow(dead_code)]
     fn set_max_capacity(&self, max_capacity: usize) {
-        let mut mk = self.message_key_max_capacity
-            .lock();
+        let mut mk = self.message_key_max_capacity.lock();
         *mk = max_capacity;
     }
 
@@ -193,28 +191,27 @@ impl<T> SpinMutex<T> {
             data: UnsafeCell::new(data),
         }
     }
-    
+
     /// Simplified `Mutex` impl that does not depend on `std`
     /// Warning: this should not be used for production purposes
     pub fn lock(&self) -> SpinMutexGuard<T> {
         // Spin until we can acquire the lock
-        while self.locked.compare_exchange_weak(
-            false, 
-            true, 
-            Ordering::Acquire, 
-            Ordering::Relaxed
-        ).is_err() {
+        while self
+            .locked
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             // Hint to the CPU that we're spinning
             core::hint::spin_loop();
         }
-        
+
         SpinMutexGuard { mutex: self }
     }
 }
 
 impl<T> Deref for SpinMutexGuard<'_, T> {
     type Target = T;
-    
+
     fn deref(&self) -> &Self::Target {
         unsafe { &*self.mutex.data.get() }
     }

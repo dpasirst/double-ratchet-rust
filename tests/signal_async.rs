@@ -29,13 +29,13 @@
 use aes::Aes256;
 use async_trait::async_trait;
 use cbc::cipher::block_padding::Pkcs7;
-use cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use cipher::generic_array::{typenum::U32, GenericArray};
+use cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use clear_on_drop::clear::Clear;
-use double_ratchet::common::{self as dr, KeyPair as _, DecryptError, DRError};
+use double_ratchet::common::{self as dr, DRError, DecryptError, KeyPair as _};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
-use rand_core::{CryptoRng, RngCore, OsRng};
+use rand_core::{CryptoRng, OsRng, RngCore};
 use sha2::Sha256;
 use std::convert::TryInto;
 use std::fmt;
@@ -136,19 +136,19 @@ impl dr::CryptoProvider for SignalCryptoProvider {
             Err(DecryptError::DecryptFailure)
         }
     }
-    
+
     fn new_public_key(key: &[u8]) -> Result<Self::PublicKey, DRError> {
         let key: [u8; 32] = key.try_into().map_err(|_| DRError::InvalidKey)?;
         Ok(PublicKey(x25519_dalek::PublicKey::from(key)))
     }
-    
+
     fn new_root_key(key: &[u8]) -> Result<Self::RootKey, DRError> {
-        let key= GenericArray::<u8, U32>::clone_from_slice(key);
+        let key = GenericArray::<u8, U32>::clone_from_slice(key);
         Ok(SymmetricKey(key))
     }
-    
+
     fn new_chain_key(key: &[u8]) -> Result<Self::ChainKey, DRError> {
-        let key= GenericArray::<u8, U32>::clone_from_slice(key);
+        let key = GenericArray::<u8, U32>::clone_from_slice(key);
         Ok(SymmetricKey(key))
     }
 }
@@ -220,14 +220,14 @@ impl dr::KeyPair for KeyPair {
     fn public(&self) -> &PublicKey {
         &self.public
     }
-    
+
     fn private_bytes(&self) -> Vec<u8> {
         self.private.to_bytes().to_vec()
     }
-    
+
     fn new_from_bytes(private: &[u8], public: &[u8]) -> Result<Self, DRError>
     where
-        Self: Sized 
+        Self: Sized,
     {
         let private: [u8; 32] = private.try_into().map_err(|_| DRError::InvalidKey)?;
         let public: [u8; 32] = public.try_into().map_err(|_| DRError::InvalidKey)?;
@@ -258,7 +258,6 @@ impl AsRef<[u8]> for SymmetricKey {
         self.0.as_slice()
     }
 }
-
 
 impl Drop for SymmetricKey {
     fn drop(&mut self) {
@@ -327,7 +326,7 @@ async fn signal_session() {
     assert!(bob.ratchet_decrypt(&h_a_1, &ct_a_1, ad_a).await.is_err());
     // No fake messages
     assert!(bob
-        .ratchet_decrypt(&h_a_2, b"Incorrect ciphertext", ad_a).await
+        .ratchet_decrypt(&h_a_2, b"Incorrect ciphertext", ad_a)
+        .await
         .is_err());
 }
-

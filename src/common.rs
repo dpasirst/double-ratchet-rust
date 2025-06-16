@@ -2,16 +2,23 @@ use core::hash::Hash;
 use rand_core::{CryptoRng, RngCore};
 
 #[cfg(not(feature = "std"))]
-use alloc::{fmt::{self, Debug}, string::String, vec::Vec};
+use alloc::{
+    fmt::{self, Debug},
+    string::String,
+    vec::Vec,
+};
 #[cfg(not(feature = "std"))]
 use core::error::Error;
 #[cfg(feature = "std")]
-use std::{error::Error, fmt::{self, Debug}, string::String, vec::Vec};
-
+use std::{
+    error::Error,
+    fmt::{self, Debug},
+    string::String,
+    vec::Vec,
+};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-
 
 /// Upper limit on the receive chain ratchet steps when trying to decrypt. Prevents a
 /// denial-of-service attack where the attacker attempts to drive up the number of
@@ -20,15 +27,14 @@ pub const DEFAULT_MAX_SKIP: usize = 1000;
 
 /// Maximum amount of skipped message keys that can be stored per double ratchet id.
 /// The id represents a 1:1 (alice to bob, where same alice to different bob would
-/// be a different id.) Prevents a denial-of-service attack where the attacker 
-/// attempts drive up the number of message keys that must be stored by rotating 
-/// public keys. Thus the key cache would store a maximum number of entries per 
+/// be a different id.) Prevents a denial-of-service attack where the attacker
+/// attempts drive up the number of message keys that must be stored by rotating
+/// public keys. Thus the key cache would store a maximum number of entries per
 /// across multiple chains.
 pub const DEFAULT_MKS_CAPACITY: usize = 3000;
 
 /// Message Counter (as seen in the header)
 pub type Counter = u64;
-
 
 /// `SessionState` requires the serde feature enablement
 /// it allows for persistence (save/recover) of a double ratchet
@@ -289,7 +295,6 @@ pub(crate) enum Diff<CP: CryptoProvider> {
     // Key was part of the next receive chain
     NextChain(CP::RootKey, CP::ChainKey, Vec<CP::MessageKey>),
 }
-
 
 /// General Errors
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

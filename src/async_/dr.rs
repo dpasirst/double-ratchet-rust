@@ -11,14 +11,17 @@ use alloc::{sync::Arc, vec::Vec};
 #[cfg(feature = "std")]
 use std::{sync::Arc, vec::Vec};
 
-
 #[cfg(feature = "serde")]
 use crate::common::SessionState;
-use crate::{common::{Counter, CryptoProvider, DRError, DecryptError, Diff, EncryptUninit, Header, KeyPair}, async_::{DefaultKeyStore, MessageKeyCacheTrait}};
+use crate::{
+    async_::{DefaultKeyStore, MessageKeyCacheTrait},
+    common::{
+        Counter, CryptoProvider, DRError, DecryptError, Diff, EncryptUninit, Header, KeyPair,
+    },
+};
 
 // TODO: avoid heap allocations in encrypt/decrypt interfaces
 // TODO: HeaderEncrypted version
-
 
 /// The `DoubleRatchet` can encrypt/decrypt messages while providing forward secrecy and
 /// post-compromise security.
@@ -270,7 +273,6 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
         self.msg_key_cache = cache;
     }
 
-
     /// The current public key that can be shared with the other party
     pub fn public_key(&self) -> &CP::PublicKey {
         self.dhs.public()
@@ -288,9 +290,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
     /// based on the key cache implementation
     #[allow(dead_code)]
     pub fn set_max_skip(&self, max_skip: usize) {
-        self.msg_key_cache.set_max_skip(
-            max_skip
-        );
+        self.msg_key_cache.set_max_skip(max_skip);
     }
 
     /// maximum number of skipped capacity to prevent `DoS`
@@ -305,14 +305,11 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
     /// based on the key cache implementation
     #[allow(dead_code)]
     pub fn set_max_capacity(&self, max_capacity: usize) {
-        self.msg_key_cache.set_max_capacity(
-            max_capacity
-        );
+        self.msg_key_cache.set_max_capacity(max_capacity);
     }
 
-
     /// allows the export of the current double ratchet state for persistence
-    /// WARNING: the includes the current private keys, etc. and should 
+    /// WARNING: the includes the current private keys, etc. and should
     /// be used with caution
     #[allow(dead_code)]
     #[cfg(feature = "serde")]
@@ -473,8 +470,10 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
         if let Some(mk) = self.msg_key_cache.get(&self.id, &h.dh, h.n).await {
             Ok((OldKey, CP::decrypt(&mk, ct, ad)?))
         } else if self.dhr.as_ref() == Some(&h.dh) {
-            let (ckr, mut mks) =
-                Self::skip_message_keys(self.ckr.as_ref().unwrap(), self.get_current_skip(h).await?);
+            let (ckr, mut mks) = Self::skip_message_keys(
+                self.ckr.as_ref().unwrap(),
+                self.get_current_skip(h).await?,
+            );
             let mk = mks.pop().unwrap();
             Ok((CurrentChain(ckr, mks), CP::decrypt(&mk, ct, ad)?))
         } else {
@@ -513,7 +512,8 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
             Err(DecryptError::SkipTooLarge)
         } else if self
             .msg_key_cache
-            .can_store(&self.id, &h.dh, (prev_skip + skip).saturating_sub(1)).await
+            .can_store(&self.id, &h.dh, (prev_skip + skip).saturating_sub(1))
+            .await
         {
             Ok(skip)
         } else {
@@ -527,7 +527,9 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
         match diff {
             OldKey => self.msg_key_cache.remove(&self.id, &h.dh, h.n).await,
             CurrentChain(ckr, mks) => {
-                self.msg_key_cache.extend(self.id, &h.dh, self.nr, mks).await;
+                self.msg_key_cache
+                    .extend(self.id, &h.dh, self.nr, mks)
+                    .await;
                 self.ckr = Some(ckr);
                 self.nr = h.n + 1;
             }
@@ -536,7 +538,9 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
                     let ckr = self.ckr.as_ref().unwrap();
                     let (_, prev_mks) = Self::skip_message_keys(ckr, (h.pn - self.nr - 1) as usize);
                     let dhr = self.dhr.as_ref().unwrap();
-                    self.msg_key_cache.extend(self.id, dhr, self.nr, prev_mks).await;
+                    self.msg_key_cache
+                        .extend(self.id, dhr, self.nr, prev_mks)
+                        .await;
                 }
                 self.dhr = Some(h.dh.clone());
                 self.rk = rk;
@@ -574,9 +578,13 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
 }
 
 #[cfg(feature = "serde")]
-impl<'a, CP: CryptoProvider> TryFrom<&'a (SessionState, Option<Arc<dyn MessageKeyCacheTrait<CP>>>)> for DoubleRatchet<CP> {
+impl<'a, CP: CryptoProvider> TryFrom<&'a (SessionState, Option<Arc<dyn MessageKeyCacheTrait<CP>>>)>
+    for DoubleRatchet<CP>
+{
     type Error = DRError;
-    fn try_from(state: &'a (SessionState, Option<Arc<dyn MessageKeyCacheTrait<CP>>>)) -> Result<Self, Self::Error> {
+    fn try_from(
+        state: &'a (SessionState, Option<Arc<dyn MessageKeyCacheTrait<CP>>>),
+    ) -> Result<Self, Self::Error> {
         let mut instance = Self {
             id: state.0.id,
             dhs: CP::KeyPair::new_from_bytes(&state.0.dhs_priv, &state.0.dhs_pub)?,
@@ -607,7 +615,6 @@ impl<'a, CP: CryptoProvider> TryFrom<&'a (SessionState, Option<Arc<dyn MessageKe
         Ok(instance)
     }
 }
-
 
 // Create a mock CryptoProvider for testing purposes. See `tests/signal.rs` for a proper example
 // implementation.
@@ -1060,7 +1067,9 @@ mod tests {
         bob.ratchet_decrypt(&h_a_0, &ct_a_0, ad_a).await.unwrap();
         let (h_b_0, ct_b_0) = bob.ratchet_encrypt(b"Hi Alice", ad_b, &mut rng).await;
         alice.ratchet_decrypt(&h_b_0, &ct_b_0, ad_b).await.unwrap();
-        let (mut h_a_1, ct_a_1) = alice.ratchet_encrypt(b"I will lie to you now", ad_a, &mut rng).await;
+        let (mut h_a_1, ct_a_1) = alice
+            .ratchet_encrypt(b"I will lie to you now", ad_a, &mut rng)
+            .await;
         assert_eq!(h_a_1.pn, 1);
         h_a_1.pn = 0;
         assert!(bob.ratchet_decrypt(&h_a_1, &ct_a_1, ad_a).await.is_err());
@@ -1073,7 +1082,9 @@ mod tests {
         let (ad_a, ad_b) = (b"A2B", b"B2A");
         let (h_a_0, ct_a_0) = alice.ratchet_encrypt(b"Hi Bob", ad_a, &mut rng).await;
         for _ in 0..=alice.max_skip() {
-            alice.ratchet_encrypt(b"Not sending this", ad_a, &mut rng).await;
+            alice
+                .ratchet_encrypt(b"Not sending this", ad_a, &mut rng)
+                .await;
         }
         let (h_a_1, ct_a_1) = alice.ratchet_encrypt(b"n > MAXSKIP", ad_a, &mut rng).await;
         assert_eq!(
@@ -1100,7 +1111,9 @@ mod tests {
         let mks_capacity = alice.msg_key_cache.max_capacity(); //aka DEFAULT_MKS_CAPACITY
         while stored < mks_capacity {
             for _ in 0..cmp::min(alice.max_skip(), mks_capacity - stored) {
-                alice.ratchet_encrypt(b"Not sending this", ad_a, &mut rng).await;
+                alice
+                    .ratchet_encrypt(b"Not sending this", ad_a, &mut rng)
+                    .await;
             }
             let (h_a, ct_a) = alice.ratchet_encrypt(b"Hello Bob", ad_a, &mut rng).await;
             bob.ratchet_decrypt(&h_a, &ct_a, ad_a).await.unwrap();
@@ -1118,7 +1131,9 @@ mod tests {
                 .map(|hm| hm.len())
                 .sum::<usize>();
         }
-        alice.ratchet_encrypt(b"Bob can't store this key anymore", ad_a, &mut rng).await;
+        alice
+            .ratchet_encrypt(b"Bob can't store this key anymore", ad_a, &mut rng)
+            .await;
         let (h_a, ct_a) = alice.ratchet_encrypt(b"Gotcha, Bob!", ad_a, &mut rng).await;
         assert_eq!(
             Err(DecryptError::StorageFull),
@@ -1137,14 +1152,18 @@ mod tests {
         let (mut alice, mut bob) = symmetric_setup(&mut rng);
         alice.pn = 10;
         bob.pn = 10;
-        let (h_a, ct_a) = alice.ratchet_encrypt(b"not important", ad_a, &mut rng).await;
+        let (h_a, ct_a) = alice
+            .ratchet_encrypt(b"not important", ad_a, &mut rng)
+            .await;
         let (h_b, ct_b) = bob.ratchet_encrypt(b"not important", ad_b, &mut rng).await;
         let _ = alice.ratchet_decrypt(&h_b, &ct_b, ad_b).await;
         let _ = bob.ratchet_decrypt(&h_a, &ct_a, ad_a).await;
 
         let (mut alice, mut bob) = asymmetric_setup(&mut rng);
         alice.pn = 10;
-        let (h_a, ct_a) = alice.ratchet_encrypt(b"not important", ad_a, &mut rng).await;
+        let (h_a, ct_a) = alice
+            .ratchet_encrypt(b"not important", ad_a, &mut rng)
+            .await;
         let _ = bob.ratchet_decrypt(&h_a, &ct_a, ad_a).await;
         bob.pn = 10;
         let (h_b, ct_b) = bob.ratchet_encrypt(b"not important", ad_b, &mut rng).await;
