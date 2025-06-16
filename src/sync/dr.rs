@@ -13,9 +13,7 @@ use std::{sync::Arc, vec::Vec};
 #[cfg(feature = "serde")]
 use crate::common::SessionState;
 use crate::{
-    common::{
-        Counter, CryptoProvider, DRError, DecryptError, Diff, EncryptUninit, Header, KeyPair,
-    },
+    Counter, CryptoProvider, DRError, DecryptError, Diff, EncryptUninit, Header, KeyPair,
     sync::{DefaultKeyStore, MessageKeyCacheTrait},
 };
 

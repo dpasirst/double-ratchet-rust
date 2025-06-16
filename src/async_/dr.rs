@@ -15,9 +15,7 @@ use std::{sync::Arc, vec::Vec};
 use crate::common::SessionState;
 use crate::{
     async_::{DefaultKeyStore, MessageKeyCacheTrait},
-    common::{
-        Counter, CryptoProvider, DRError, DecryptError, Diff, EncryptUninit, Header, KeyPair,
-    },
+    Counter, CryptoProvider, DRError, DecryptError, Diff, EncryptUninit, Header, KeyPair,
 };
 
 // TODO: avoid heap allocations in encrypt/decrypt interfaces
@@ -313,7 +311,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
     /// be used with caution
     #[allow(dead_code)]
     #[cfg(feature = "serde")]
-    pub async fn session_state(&self) -> SessionState {
+    pub fn session_state(&self) -> SessionState {
         SessionState {
             id: self.id,
             dhs_priv: self.dhs.private_bytes(),
@@ -830,13 +828,13 @@ mod tests {
     async fn test_asymmetric_setup_with_session_state() {
         let mut rng = mock::Rng::default();
         let (mut alice, bob) = asymmetric_setup(&mut rng);
-        let bob_session_state = bob.session_state().await.encode().unwrap();
+        let bob_session_state = bob.session_state().encode().unwrap();
 
         // Alice can encrypt, Bob can't
         let (pt_a, ad_a) = (b"Hi Bobby", b"A2B");
         let (pt_b, ad_b) = (b"What's up Al?", b"B2A");
         let (h_a, ct_a) = alice.ratchet_encrypt(pt_a, ad_a, &mut rng).await;
-        let alice_session_state = alice.session_state().await.encode().unwrap();
+        let alice_session_state = alice.session_state().encode().unwrap();
 
         let bob_session = SessionState::decode(&bob_session_state).unwrap();
         let mut bob = DR::try_from(&(bob_session, None)).unwrap();
