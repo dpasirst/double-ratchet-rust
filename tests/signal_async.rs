@@ -26,11 +26,12 @@
 //! [specification]: https://signal.org/docs/specifications/doubleratchet/#recommended-cryptographic-algorithms
 
 use aes::Aes256;
+use async_trait::async_trait;
 use cbc::cipher::block_padding::Pkcs7;
 use cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use cipher::generic_array::{typenum::U32, GenericArray};
 use clear_on_drop::clear::Clear;
-use double_ratchet::sync::{self as dr, KeyPair as _};
+use double_ratchet::async_::{self as dr, KeyPair as _};
 use double_ratchet::DecryptError;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
@@ -49,6 +50,7 @@ type Aes256CbcDec = cbc::Decryptor<Aes256>;
 
 pub struct SignalCryptoProvider;
 
+#[async_trait]
 impl dr::CryptoProvider for SignalCryptoProvider {
     type PublicKey = PublicKey;
     type KeyPair = KeyPair;
@@ -85,7 +87,7 @@ impl dr::CryptoProvider for SignalCryptoProvider {
         (SymmetricKey(ck), SymmetricKey(mk))
     }
 
-    fn encrypt(key: &SymmetricKey, pt: &[u8], ad: &[u8]) -> Vec<u8> {
+    async fn encrypt(key: &SymmetricKey, pt: &[u8], ad: &[u8]) -> Vec<u8> {
         let ikm = key.0.as_slice();
         let prk = Hkdf::<Sha256>::new(None, ikm);
         let info = b"WhisperMessageKeys";
@@ -106,7 +108,7 @@ impl dr::CryptoProvider for SignalCryptoProvider {
         ct
     }
 
-    fn decrypt(key: &SymmetricKey, ct: &[u8], ad: &[u8]) -> Result<Vec<u8>, DecryptError> {
+    async fn decrypt(key: &SymmetricKey, ct: &[u8], ad: &[u8]) -> Result<Vec<u8>, DecryptError> {
         let ikm = key.0.as_slice();
         let prk = Hkdf::<Sha256>::new(None, ikm);
         let info = b"WhisperMessageKeys";
@@ -264,8 +266,8 @@ impl Drop for SymmetricKey {
     }
 }
 
-#[test]
-fn signal_session() {
+#[tokio::test]
+async fn signal_session() {
     let mut rng = OsRng;
     let (ad_a, ad_b) = (b"A2B:SessionID=42", b"B2A:SessionID=42");
 
@@ -280,7 +282,7 @@ fn signal_session() {
     let mut alice = SignalDR::new_alice(&shared, bobs_public_prekey, None, &mut rng);
     // Alice creates her first message to Bob
     let pt_a_0 = b"Hello Bob";
-    let (h_a_0, ct_a_0) = alice.ratchet_encrypt(pt_a_0, ad_a, &mut rng);
+    let (h_a_0, ct_a_0) = alice.ratchet_encrypt(pt_a_0, ad_a, &mut rng).await;
     // Alice creates an initial message containing `h_a_0`, `ct_a_0` and other X3DH information
 
     // Bob receives the message and finishes his side of the X3DH handshake
@@ -288,44 +290,44 @@ fn signal_session() {
     // Bob can now decrypt the initial message
     assert_eq!(
         Ok(Vec::from(&b"Hello Bob"[..])),
-        bob.ratchet_decrypt(&h_a_0, &ct_a_0, ad_a)
+        bob.ratchet_decrypt(&h_a_0, &ct_a_0, ad_a).await
     );
     // Bob is now fully initialized: both sides can send and receive message
 
     let pt_a_1 = b"I will send this later";
-    let (h_a_1, ct_a_1) = alice.ratchet_encrypt(pt_a_1, ad_a, &mut rng);
+    let (h_a_1, ct_a_1) = alice.ratchet_encrypt(pt_a_1, ad_a, &mut rng).await;
     let pt_b_0 = b"My first reply";
-    let (h_b_0, ct_b_0) = bob.ratchet_encrypt(pt_b_0, ad_b, &mut rng);
+    let (h_b_0, ct_b_0) = bob.ratchet_encrypt(pt_b_0, ad_b, &mut rng).await;
     assert_eq!(
         Ok(Vec::from(&pt_b_0[..])),
-        alice.ratchet_decrypt(&h_b_0, &ct_b_0, ad_b)
+        alice.ratchet_decrypt(&h_b_0, &ct_b_0, ad_b).await
     );
     let pt_a_2 = b"What a boring conversation";
-    let (h_a_2, _ct_a_2) = alice.ratchet_encrypt(pt_a_2, ad_a, &mut rng);
+    let (h_a_2, _ct_a_2) = alice.ratchet_encrypt(pt_a_2, ad_a, &mut rng).await;
     let pt_a_3 = b"Don't you agree?";
-    let (h_a_3, ct_a_3) = alice.ratchet_encrypt(pt_a_3, ad_a, &mut rng);
+    let (h_a_3, ct_a_3) = alice.ratchet_encrypt(pt_a_3, ad_a, &mut rng).await;
     assert_eq!(
         Ok(Vec::from(&pt_a_3[..])),
-        bob.ratchet_decrypt(&h_a_3, &ct_a_3, ad_a)
+        bob.ratchet_decrypt(&h_a_3, &ct_a_3, ad_a).await
     );
 
     let pt_b_1 = b"Agree with what?";
-    let (h_b_1, ct_b_1) = bob.ratchet_encrypt(pt_b_1, ad_b, &mut rng);
+    let (h_b_1, ct_b_1) = bob.ratchet_encrypt(pt_b_1, ad_b, &mut rng).await;
     assert_eq!(
         Ok(Vec::from(&pt_b_1[..])),
-        alice.ratchet_decrypt(&h_b_1, &ct_b_1, ad_b)
+        alice.ratchet_decrypt(&h_b_1, &ct_b_1, ad_b).await
     );
 
     assert_eq!(
         Ok(Vec::from(&pt_a_1[..])),
-        bob.ratchet_decrypt(&h_a_1, &ct_a_1, ad_a)
+        bob.ratchet_decrypt(&h_a_1, &ct_a_1, ad_a).await
     );
 
     // No resending (that key is already deleted)
-    assert!(bob.ratchet_decrypt(&h_a_1, &ct_a_1, ad_a).is_err());
+    assert!(bob.ratchet_decrypt(&h_a_1, &ct_a_1, ad_a).await.is_err());
     // No fake messages
     assert!(bob
-        .ratchet_decrypt(&h_a_2, b"Incorrect ciphertext", ad_a)
+        .ratchet_decrypt(&h_a_2, b"Incorrect ciphertext", ad_a).await
         .is_err());
 }
 

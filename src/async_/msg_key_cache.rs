@@ -1,5 +1,7 @@
+use async_trait::async_trait;
+
 #[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 use core::{
     any::Any,
@@ -11,16 +13,10 @@ use core::{
 use hashbrown::HashMap;
 
 #[cfg(feature = "std")]
-use std::vec::Vec;
+use std::{boxed::Box, vec::Vec};
 
-use crate::{Counter, CryptoProvider};
+use crate::{async_::{Counter, CryptoProvider}, DEFAULT_MAX_SKIP, DEFAULT_MKS_CAPACITY};
 
-/// Upper limit on the receive chain ratchet steps when trying to decrypt. Prevents a
-/// denial-of-service attack where the attacker
-pub const DEFAULT_MAX_SKIP: usize = 1000;
-
-/// Maximum amount of skipped message keys that can be stored
-const DEFAULT_MKS_CAPACITY: usize = 2000;
 
 /// A `MessageKeyCacheTrait` holds the skipped `MessageKey`s.
 ///
@@ -29,19 +25,22 @@ const DEFAULT_MKS_CAPACITY: usize = 2000;
 /// discussion.
 ///
 /// [specification]: https://signal.org/docs/specifications/doubleratchet/#deletion-of-skipped-message-keys
+#[async_trait]
 pub trait MessageKeyCacheTrait<CP: CryptoProvider>: Any + Debug + Send + Sync {
     /// maximum number of skipped entries between an alice & bob for a specific chain to prevent `DoS`
-    fn max_skip(&self, id: &u64) -> usize;
+    fn max_skip(&self) -> usize;
+    /// set the maximum entries for skip
+    fn set_max_skip(&self, max_skip: usize);
     /// maximum number number of entries in total between alice & bob
-    fn max_capacity(&self, id: &u64) -> usize;
-    /// set the maximum entries for skip and total
-    fn set_maximums(&self, id: u64, max_skip: usize, max_capacity: usize);
+    fn max_capacity(&self) -> usize;
+    /// set the maximum entries for total capacity
+    fn set_max_capacity(&self, max_capacity: usize);
 
     /// Get the `MessageKey` at `(dh, n)` if it is stored
-    fn get(&self, id: &u64, dh: &CP::PublicKey, n: Counter) -> Option<CP::MessageKey>;
+    async fn get(&self, id: &u64, dh: &CP::PublicKey, n: Counter) -> Option<CP::MessageKey>;
 
     /// Do `n` more `MessageKeys` fit in the `KeyStore` for `dh` chain?
-    fn can_store(&self, id: &u64, dh: &CP::PublicKey, n: usize) -> bool;
+    async fn can_store(&self, id: &u64, dh: &CP::PublicKey, n: usize) -> bool;
 
     /// Extend the storage with `mks`
     ///
@@ -49,12 +48,12 @@ pub trait MessageKeyCacheTrait<CP: CryptoProvider>: Any + Debug + Send + Sync {
     ///   (dh, n  ): mks[0]
     ///   (dh, n+1): mks[1]
     ///   ...
-    fn extend(&self, id: u64, dh: &CP::PublicKey, n: Counter, mks: Vec<CP::MessageKey>);
+    async fn extend(&self, id: u64, dh: &CP::PublicKey, n: Counter, mks: Vec<CP::MessageKey>);
 
     /// Remove the `MessageKey` at index `(dh, n)`
     ///
     /// Assumes the `MessageKey` is indeed stored.
-    fn remove(&self, id: &u64, dh: &CP::PublicKey, n: Counter);
+    async fn remove(&self, id: &u64, dh: &CP::PublicKey, n: Counter);
 }
 
 ///
@@ -65,9 +64,10 @@ pub struct DefaultKeyStore<CP: CryptoProvider> {
     /// `[id : [PublicKey : [ Counter : MessageKey ] ]`
     #[allow(clippy::type_complexity)]
     pub key_cache: SpinMutex<HashMap<u64, HashMap<CP::PublicKey, HashMap<Counter, CP::MessageKey>>>>,
-    /// holds the per user configuration of `max_skip` & `max_capacity`
-    /// `[id : (max_skip, message_key_max_capacity)]`
-    pub maximums: SpinMutex<HashMap<u64, (usize, usize)>>,
+    /// see DEFAULT_MAX_SKIP
+    pub max_skip: SpinMutex<usize>,
+    /// see DEFAULT_MKS_CAPACITY
+    pub message_key_max_capacity: SpinMutex<usize>,
 }
 
 impl<CP> fmt::Debug for DefaultKeyStore<CP>
@@ -79,8 +79,8 @@ where
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "KeyStore Maximums({:?})\nkey_cache({:?})",
-            self.maximums.lock().raw_entry(), self.key_cache.lock().raw_entry()
+            "KeyStore Max skip {}, Max capacity {},\nkey_cache({:?})",
+            *self.max_skip.lock(), *self.message_key_max_capacity.lock(), self.key_cache.lock().raw_entry()
         )
     }
 }
@@ -91,7 +91,8 @@ impl<CP: CryptoProvider + 'static> DefaultKeyStore<CP> {
     pub fn new() -> Self {
         Self {
             key_cache: SpinMutex::new(HashMap::new()),
-            maximums: SpinMutex::new(HashMap::new()),
+            max_skip: SpinMutex::new(DEFAULT_MAX_SKIP),
+            message_key_max_capacity: SpinMutex::new(DEFAULT_MKS_CAPACITY),
         }
     }
 }
@@ -102,45 +103,49 @@ impl<CP: CryptoProvider + 'static> Default for DefaultKeyStore<CP> {
     }
 }
 
+#[async_trait]
 impl<CP: CryptoProvider + 'static> MessageKeyCacheTrait<CP> for DefaultKeyStore<CP> {
-    fn max_skip(&self, id: &u64) -> usize {
-        self.maximums
+    fn max_skip(&self) -> usize {
+        *self.max_skip
             .lock()
-            .get(id)
-            .map_or(DEFAULT_MAX_SKIP, |m| m.0)
     }
 
-    fn max_capacity(&self, id: &u64) -> usize {
-        self.maximums
+    fn max_capacity(&self) -> usize {
+        *self.message_key_max_capacity
             .lock()
-            .get(id)
-            .map_or(DEFAULT_MKS_CAPACITY, |m| m.1)
     }
 
     #[allow(dead_code)]
-    fn set_maximums(&self, id: u64, max_skip: usize, max_capacity: usize) {
-        self.maximums
-            .lock()
-            .insert(id, (max_skip, max_capacity));
+    fn set_max_skip(&self, max_skip: usize) {
+        let mut ms = self.max_skip
+            .lock();
+        *ms = max_skip;
     }
 
-    fn get(&self, id: &u64, dh: &CP::PublicKey, n: Counter) -> Option<CP::MessageKey> {
+    #[allow(dead_code)]
+    fn set_max_capacity(&self, max_capacity: usize) {
+        let mut mk = self.message_key_max_capacity
+            .lock();
+        *mk = max_capacity;
+    }
+
+    async fn get(&self, id: &u64, dh: &CP::PublicKey, n: Counter) -> Option<CP::MessageKey> {
         self.key_cache
             .lock()
             .get(id)
             .and_then(|hm| hm.get(dh)?.get(&n).cloned())
     }
 
-    fn can_store(&self, id: &u64, _dh: &CP::PublicKey, n: usize) -> bool {
+    async fn can_store(&self, id: &u64, _dh: &CP::PublicKey, n: usize) -> bool {
         let current = self
             .key_cache
             .lock()
             .get(id)
             .map_or(0, |hm| hm.values().map(HashMap::len).sum());
-        current + n <= self.max_capacity(id)
+        current + n <= self.max_capacity()
     }
 
-    fn extend(&self, id: u64, dh: &CP::PublicKey, n: Counter, mks: Vec<CP::MessageKey>) {
+    async fn extend(&self, id: u64, dh: &CP::PublicKey, n: Counter, mks: Vec<CP::MessageKey>) {
         let values = (n..).zip(mks);
         let mut key_cache = self.key_cache.lock();
         let reference = key_cache.entry(id).or_default();
@@ -151,7 +156,7 @@ impl<CP: CryptoProvider + 'static> MessageKeyCacheTrait<CP> for DefaultKeyStore<
         }
     }
 
-    fn remove(&self, id: &u64, dh: &CP::PublicKey, n: Counter) {
+    async fn remove(&self, id: &u64, dh: &CP::PublicKey, n: Counter) {
         let mut key_cache = self.key_cache.lock();
         debug_assert!(key_cache.get(id).is_some_and(|hm| hm.contains_key(dh)));
         if let Some(h1) = key_cache.get_mut(id) {
