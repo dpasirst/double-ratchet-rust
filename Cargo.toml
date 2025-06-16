@@ -14,28 +14,31 @@ license = "BSD-3-Clause"
 travis-ci = {repository = "sebastianv89/double-ratchet"}
 
 [dependencies]
-rand_core = "^0.6.4"
+async-trait = { version = "^0.1.88", optional = true }
 hashbrown = "^0.15.0"
+rand_core = "^0.6.4"
 serde = { version = "^1.0.219", features = ["derive", "serde_derive"], optional = true  }
 serde_json = { version = "^1.0.140", optional = true }
 
 
 [dev-dependencies]
+aes = {version = "0.8.4", features = ["zeroize"] }
+cbc = { version = "0.1.2", features = ["alloc", "zeroize"] }
+chacha20poly1305 = "0.10.1"
+cipher = { version = "0.4.4", features = ["block-padding", "zeroize"] }
 clear_on_drop = "0.2"
 hkdf = "0.12.4"
 hmac = "0.12.1"
 sha2 = "0.10.9"
 subtle = "2"
+tokio = { version = "1.45.0", features = ["full"] }
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"]}
-chacha20poly1305 = "0.10.1"
-aes = {version = "0.8.4", features = ["zeroize"] }
-cipher = { version = "0.4.4", features = ["block-padding", "zeroize"] }
-cbc = { version = "0.1.2", features = ["alloc", "zeroize"] }
 
 [features]
-default = ["std", "serde", "test"]
+default = ["std", "serde", "async", "test"]
 std = []
 serde = ["dep:serde", "dep:serde_json"]
+async = ["dep:async-trait"]
 # Allow doctests with mock objects
 # See: https://github.com/rust-lang/rust/issues/45599
 test = []

@@ -1,5 +1,7 @@
+use async_trait::async_trait;
+
 #[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 use core::{
     any::Any,
@@ -11,9 +13,9 @@ use core::{
 use hashbrown::HashMap;
 
 #[cfg(feature = "std")]
-use std::vec::Vec;
+use std::{boxed::Box, vec::Vec};
 
-use crate::{sync::{Counter, CryptoProvider}, DEFAULT_MAX_SKIP, DEFAULT_MKS_CAPACITY};
+use crate::{async_::{Counter, CryptoProvider}, DEFAULT_MAX_SKIP, DEFAULT_MKS_CAPACITY};
 
 
 /// A `MessageKeyCacheTrait` holds the skipped `MessageKey`s.
@@ -23,6 +25,7 @@ use crate::{sync::{Counter, CryptoProvider}, DEFAULT_MAX_SKIP, DEFAULT_MKS_CAPAC
 /// discussion.
 ///
 /// [specification]: https://signal.org/docs/specifications/doubleratchet/#deletion-of-skipped-message-keys
+#[async_trait]
 pub trait MessageKeyCacheTrait<CP: CryptoProvider>: Any + Debug + Send + Sync {
     /// maximum number of skipped entries between an alice & bob for a specific chain to prevent `DoS`
     fn max_skip(&self) -> usize;
@@ -34,10 +37,10 @@ pub trait MessageKeyCacheTrait<CP: CryptoProvider>: Any + Debug + Send + Sync {
     fn set_max_capacity(&self, max_capacity: usize);
 
     /// Get the `MessageKey` at `(dh, n)` if it is stored
-    fn get(&self, id: &u64, dh: &CP::PublicKey, n: Counter) -> Option<CP::MessageKey>;
+    async fn get(&self, id: &u64, dh: &CP::PublicKey, n: Counter) -> Option<CP::MessageKey>;
 
     /// Do `n` more `MessageKeys` fit in the `KeyStore` for `dh` chain?
-    fn can_store(&self, id: &u64, dh: &CP::PublicKey, n: usize) -> bool;
+    async fn can_store(&self, id: &u64, dh: &CP::PublicKey, n: usize) -> bool;
 
     /// Extend the storage with `mks`
     ///
@@ -45,12 +48,12 @@ pub trait MessageKeyCacheTrait<CP: CryptoProvider>: Any + Debug + Send + Sync {
     ///   (dh, n  ): mks[0]
     ///   (dh, n+1): mks[1]
     ///   ...
-    fn extend(&self, id: u64, dh: &CP::PublicKey, n: Counter, mks: Vec<CP::MessageKey>);
+    async fn extend(&self, id: u64, dh: &CP::PublicKey, n: Counter, mks: Vec<CP::MessageKey>);
 
     /// Remove the `MessageKey` at index `(dh, n)`
     ///
     /// Assumes the `MessageKey` is indeed stored.
-    fn remove(&self, id: &u64, dh: &CP::PublicKey, n: Counter);
+    async fn remove(&self, id: &u64, dh: &CP::PublicKey, n: Counter);
 }
 
 ///
@@ -100,6 +103,7 @@ impl<CP: CryptoProvider + 'static> Default for DefaultKeyStore<CP> {
     }
 }
 
+#[async_trait]
 impl<CP: CryptoProvider + 'static> MessageKeyCacheTrait<CP> for DefaultKeyStore<CP> {
     fn max_skip(&self) -> usize {
         *self.max_skip
@@ -125,14 +129,14 @@ impl<CP: CryptoProvider + 'static> MessageKeyCacheTrait<CP> for DefaultKeyStore<
         *mk = max_capacity;
     }
 
-    fn get(&self, id: &u64, dh: &CP::PublicKey, n: Counter) -> Option<CP::MessageKey> {
+    async fn get(&self, id: &u64, dh: &CP::PublicKey, n: Counter) -> Option<CP::MessageKey> {
         self.key_cache
             .lock()
             .get(id)
             .and_then(|hm| hm.get(dh)?.get(&n).cloned())
     }
 
-    fn can_store(&self, id: &u64, _dh: &CP::PublicKey, n: usize) -> bool {
+    async fn can_store(&self, id: &u64, _dh: &CP::PublicKey, n: usize) -> bool {
         let current = self
             .key_cache
             .lock()
@@ -141,7 +145,7 @@ impl<CP: CryptoProvider + 'static> MessageKeyCacheTrait<CP> for DefaultKeyStore<
         current + n <= self.max_capacity()
     }
 
-    fn extend(&self, id: u64, dh: &CP::PublicKey, n: Counter, mks: Vec<CP::MessageKey>) {
+    async fn extend(&self, id: u64, dh: &CP::PublicKey, n: Counter, mks: Vec<CP::MessageKey>) {
         let values = (n..).zip(mks);
         let mut key_cache = self.key_cache.lock();
         let reference = key_cache.entry(id).or_default();
@@ -152,7 +156,7 @@ impl<CP: CryptoProvider + 'static> MessageKeyCacheTrait<CP> for DefaultKeyStore<
         }
     }
 
-    fn remove(&self, id: &u64, dh: &CP::PublicKey, n: Counter) {
+    async fn remove(&self, id: &u64, dh: &CP::PublicKey, n: Counter) {
         let mut key_cache = self.key_cache.lock();
         debug_assert!(key_cache.get(id).is_some_and(|hm| hm.contains_key(dh)));
         if let Some(h1) = key_cache.get_mut(id) {
