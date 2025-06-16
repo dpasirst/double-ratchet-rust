@@ -1,3 +1,4 @@
+#![cfg(feature = "async")]
 //! The `SignalDoubleRatchet` provides an example of a secure implementation of the
 //! `double_ratchet::CryptoProvider`. This example code is based on the recommended cryptographic
 //! algorithms of the [specification]. I have not checked if the code is fully compatible with that
