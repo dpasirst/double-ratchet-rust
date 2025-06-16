@@ -30,8 +30,7 @@ use cbc::cipher::block_padding::Pkcs7;
 use cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use cipher::generic_array::{typenum::U32, GenericArray};
 use clear_on_drop::clear::Clear;
-use double_ratchet::sync::{self as dr, KeyPair as _};
-use double_ratchet::DecryptError;
+use double_ratchet::common::{self as dr, KeyPair as _, DecryptError, DRError};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use rand_core::{CryptoRng, RngCore, OsRng};
@@ -42,7 +41,7 @@ use std::hash::{Hash, Hasher};
 use subtle::ConstantTimeEq;
 use x25519_dalek::{self, SharedSecret};
 
-pub type SignalDR = dr::DoubleRatchet<SignalCryptoProvider>;
+pub type SignalDR = double_ratchet::sync::DoubleRatchet<SignalCryptoProvider>;
 
 type Aes256CbcEnc = cbc::Encryptor<Aes256>;
 type Aes256CbcDec = cbc::Decryptor<Aes256>;
@@ -135,17 +134,17 @@ impl dr::CryptoProvider for SignalCryptoProvider {
         }
     }
     
-    fn new_public_key(key: &[u8]) -> Result<Self::PublicKey, double_ratchet::DRError> {
-        let key: [u8; 32] = key.try_into().map_err(|_| double_ratchet::DRError::InvalidKey)?;
+    fn new_public_key(key: &[u8]) -> Result<Self::PublicKey, DRError> {
+        let key: [u8; 32] = key.try_into().map_err(|_| DRError::InvalidKey)?;
         Ok(PublicKey(x25519_dalek::PublicKey::from(key)))
     }
     
-    fn new_root_key(key: &[u8]) -> Result<Self::RootKey, double_ratchet::DRError> {
+    fn new_root_key(key: &[u8]) -> Result<Self::RootKey, DRError> {
         let key= GenericArray::<u8, U32>::clone_from_slice(key);
         Ok(SymmetricKey(key))
     }
     
-    fn new_chain_key(key: &[u8]) -> Result<Self::ChainKey, double_ratchet::DRError> {
+    fn new_chain_key(key: &[u8]) -> Result<Self::ChainKey, DRError> {
         let key= GenericArray::<u8, U32>::clone_from_slice(key);
         Ok(SymmetricKey(key))
     }
@@ -223,12 +222,12 @@ impl dr::KeyPair for KeyPair {
         self.private.to_bytes().to_vec()
     }
     
-    fn new_from_bytes(private: &[u8], public: &[u8]) -> Result<Self, double_ratchet::DRError>
+    fn new_from_bytes(private: &[u8], public: &[u8]) -> Result<Self, DRError>
     where
         Self: Sized 
     {
-        let private: [u8; 32] = private.try_into().map_err(|_| double_ratchet::DRError::InvalidKey)?;
-        let public: [u8; 32] = public.try_into().map_err(|_| double_ratchet::DRError::InvalidKey)?;
+        let private: [u8; 32] = private.try_into().map_err(|_| DRError::InvalidKey)?;
+        let public: [u8; 32] = public.try_into().map_err(|_| DRError::InvalidKey)?;
         Ok(KeyPair {
             private: x25519_dalek::StaticSecret::from(private),
             public: PublicKey::from(&x25519_dalek::StaticSecret::from(public)),
