@@ -7,9 +7,9 @@ use core::{cmp, fmt, hash::Hash};
 use rand_core::{CryptoRng, OsRng, RngCore};
 
 #[cfg(not(feature = "std"))]
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 #[cfg(feature = "std")]
-use std::{sync::Arc, vec::Vec};
+use std::{boxed::Box, sync::Arc, vec::Vec};
 
 #[cfg(feature = "serde")]
 use crate::common::SessionState;
@@ -132,7 +132,7 @@ pub struct DoubleRatchet<CP: CryptoProvider + 'static> {
     ns: Counter,
     nr: Counter,
     pn: Counter,
-    msg_key_cache: Arc<dyn MessageKeyCacheTrait<CP>>,
+    msg_key_cache: Arc<Box<dyn MessageKeyCacheTrait<CP>>>,
 }
 
 impl<CP> fmt::Debug for DoubleRatchet<CP>
@@ -203,7 +203,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
             ns: 0,
             nr: 0,
             pn: 0,
-            msg_key_cache: Arc::new(DefaultKeyStore::new()),
+            msg_key_cache: Arc::new(Box::new(DefaultKeyStore::new())),
         }
     }
 
@@ -243,7 +243,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
             ns: 0,
             nr: 0,
             pn: 0,
-            msg_key_cache: Arc::new(DefaultKeyStore::new()),
+            msg_key_cache: Arc::new(Box::new(DefaultKeyStore::new())),
         }
     }
 
@@ -259,7 +259,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
     }
 
     /// returns a copy of `MessageKeyCacheTrait` instance currently in use
-    pub fn message_key_cache(&self) -> Arc<dyn MessageKeyCacheTrait<CP>> {
+    pub fn message_key_cache(&self) -> Arc<Box<dyn MessageKeyCacheTrait<CP>>> {
         self.msg_key_cache.clone()
     }
 
@@ -267,7 +267,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
     /// the can be set immediately after creating the new `DoubleRatchet` instance
     /// or more specifically, before the the instance is used.
     /// if nothing is set, it will default to a memory only KeyCache
-    pub fn set_message_key_cache(&mut self, cache: Arc<dyn MessageKeyCacheTrait<CP>>) {
+    pub fn set_message_key_cache(&mut self, cache: Arc<Box<dyn MessageKeyCacheTrait<CP>>>) {
         self.msg_key_cache = cache;
     }
 
@@ -576,12 +576,12 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> {
 }
 
 #[cfg(feature = "serde")]
-impl<'a, CP: CryptoProvider> TryFrom<&'a (SessionState, Option<Arc<dyn MessageKeyCacheTrait<CP>>>)>
+impl<'a, CP: CryptoProvider> TryFrom<&'a (SessionState, Option<Arc<Box<dyn MessageKeyCacheTrait<CP>>>>)>
     for DoubleRatchet<CP>
 {
     type Error = DRError;
     fn try_from(
-        state: &'a (SessionState, Option<Arc<dyn MessageKeyCacheTrait<CP>>>),
+        state: &'a (SessionState, Option<Arc<Box<dyn MessageKeyCacheTrait<CP>>>>),
     ) -> Result<Self, Self::Error> {
         let mut instance = Self {
             id: state.0.id,
@@ -605,7 +605,7 @@ impl<'a, CP: CryptoProvider> TryFrom<&'a (SessionState, Option<Arc<dyn MessageKe
             ns: state.0.ns,
             nr: state.0.nr,
             pn: state.0.pn,
-            msg_key_cache: Arc::new(DefaultKeyStore::new()),
+            msg_key_cache: Arc::new(Box::new(DefaultKeyStore::new())),
         };
         if let Some(key_cache) = state.1.clone() {
             instance.set_message_key_cache(key_cache);
@@ -1119,7 +1119,7 @@ mod tests {
             // We need to downcast the trait object *inside* the Arc.
             // `&*bob.msg_key_cache` dereferences the Arc to get `&(dyn MessageKeyCacheTrait<...>)`.
             // Since `MessageKeyCacheTrait: Any`, this can be downcast.
-            let default_key_store = (&*bob.msg_key_cache as &dyn Any)
+            let default_key_store = (&**bob.msg_key_cache as &dyn Any)
                 .downcast_ref::<DefaultKeyStore<mock::CryptoProvider>>()
                 .unwrap();
             let _ = default_key_store
