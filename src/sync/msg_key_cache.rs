@@ -13,7 +13,7 @@ use hashbrown::HashMap;
 #[cfg(feature = "std")]
 use std::vec::Vec;
 
-use crate::{sync::{Counter, CryptoProvider}, DEFAULT_MAX_SKIP, DEFAULT_MKS_CAPACITY};
+use crate::common::{Counter, CryptoProvider, DEFAULT_MAX_SKIP, DEFAULT_MKS_CAPACITY};
 
 
 /// A `MessageKeyCacheTrait` holds the skipped `MessageKey`s.
