@@ -42,5 +42,3 @@ async = ["dep:async-trait"]
 # Allow doctests with mock objects
 # See: https://github.com/rust-lang/rust/issues/45599
 test = []
-
-

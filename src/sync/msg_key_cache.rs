@@ -8,9 +8,9 @@ use core::{
 use hashbrown::HashMap;
 
 #[cfg(not(feature = "std"))]
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 #[cfg(feature = "std")]
-use std::{boxed::Box, vec::Vec};
+use std::{boxed::Box, sync::Arc, vec::Vec};
 
 use crate::common::{Counter, CryptoProvider, DEFAULT_MAX_SKIP, DEFAULT_MKS_CAPACITY};
 
@@ -167,6 +167,12 @@ impl<CP: CryptoProvider + 'static> MessageKeyCacheTrait<CP> for DefaultKeyStore<
 impl<CP: CryptoProvider + 'static> Into<Box<dyn MessageKeyCacheTrait<CP>>> for DefaultKeyStore<CP> {
     fn into(self) -> Box<dyn MessageKeyCacheTrait<CP>> {
         Box::new(self)
+    }
+}
+
+impl<CP: CryptoProvider + 'static> Into<Arc<dyn MessageKeyCacheTrait<CP>>> for DefaultKeyStore<CP> {
+    fn into(self) -> Arc<dyn MessageKeyCacheTrait<CP>> {
+        Arc::new(self)
     }
 }
 
