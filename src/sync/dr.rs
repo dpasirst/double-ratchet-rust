@@ -6,9 +6,9 @@ use core::{cmp, fmt, hash::Hash};
 use rand_core::{CryptoRng, OsRng, RngCore};
 
 #[cfg(not(feature = "std"))]
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use alloc::{sync::Arc, vec::Vec};
 #[cfg(feature = "std")]
-use std::{boxed::Box, sync::Arc, vec::Vec};
+use std::{sync::Arc, vec::Vec};
 
 #[cfg(feature = "serde")]
 use crate::common::SessionState;
