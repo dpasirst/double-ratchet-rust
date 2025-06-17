@@ -169,6 +169,12 @@ impl<CP: CryptoProvider + 'static> MessageKeyCacheTrait<CP> for DefaultKeyStore<
     }
 }
 
+impl<CP: CryptoProvider + 'static> Into<Box<dyn MessageKeyCacheTrait<CP>>> for DefaultKeyStore<CP> {
+    fn into(self) -> Box<dyn MessageKeyCacheTrait<CP>> {
+        Box::new(self)
+    }
+}
+
 /// Simplified `Mutex` impl that does not depend on `std`
 /// Warning: this should not be used for production purposes
 pub struct SpinMutex<T> {

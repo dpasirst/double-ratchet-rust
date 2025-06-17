@@ -1,6 +1,3 @@
-#[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
-
 use core::{
     any::Any,
     cell::UnsafeCell,
@@ -10,8 +7,10 @@ use core::{
 };
 use hashbrown::HashMap;
 
+#[cfg(not(feature = "std"))]
+use alloc::{boxed::Box, vec::Vec};
 #[cfg(feature = "std")]
-use std::vec::Vec;
+use std::{boxed::Box, vec::Vec};
 
 use crate::common::{Counter, CryptoProvider, DEFAULT_MAX_SKIP, DEFAULT_MKS_CAPACITY};
 
@@ -162,6 +161,12 @@ impl<CP: CryptoProvider + 'static> MessageKeyCacheTrait<CP> for DefaultKeyStore<
                 }
             }
         }
+    }
+}
+
+impl<CP: CryptoProvider + 'static> Into<Box<dyn MessageKeyCacheTrait<CP>>> for DefaultKeyStore<CP> {
+    fn into(self) -> Box<dyn MessageKeyCacheTrait<CP>> {
+        Box::new(self)
     }
 }
 
