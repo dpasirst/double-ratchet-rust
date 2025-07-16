@@ -173,6 +173,12 @@ impl<'a> From<&'a x25519_dalek::StaticSecret> for PublicKey {
     }
 }
 
+impl<'a> From<&'a [u8; 32]> for PublicKey {
+    fn from(public_key: &'a [u8; 32]) -> PublicKey {
+        PublicKey(x25519_dalek::PublicKey::from(*public_key))
+    }
+}
+
 impl AsRef<[u8]> for PublicKey {
     fn as_ref(&self) -> &[u8] {
         self.0.as_bytes()
@@ -230,7 +236,7 @@ impl dr::KeyPair for KeyPair {
         let public: [u8; 32] = public.try_into().map_err(|_| DRError::InvalidKey)?;
         Ok(KeyPair {
             private: x25519_dalek::StaticSecret::from(private),
-            public: PublicKey::from(&x25519_dalek::StaticSecret::from(public)),
+            public: PublicKey::from(&public),
         })
     }
 }
